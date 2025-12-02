@@ -14,6 +14,7 @@ import (
 
 	"angrymiao-ai-server/src/configs"
 	"angrymiao-ai-server/src/core/auth"
+	"angrymiao-ai-server/src/core/botconfig"
 	"angrymiao-ai-server/src/core/chat"
 	"angrymiao-ai-server/src/core/function"
 	"angrymiao-ai-server/src/core/image"
@@ -22,16 +23,17 @@ import (
 	"angrymiao-ai-server/src/core/providers"
 	"angrymiao-ai-server/src/core/providers/llm"
 	"angrymiao-ai-server/src/core/providers/tts"
+	providersvad "angrymiao-ai-server/src/core/providers/vad"
 	"angrymiao-ai-server/src/core/providers/vlllm"
 	"angrymiao-ai-server/src/core/types"
 	"angrymiao-ai-server/src/core/utils"
-	"angrymiao-ai-server/src/models"
-	"angrymiao-ai-server/src/services"
 	"angrymiao-ai-server/src/task"
 
+	"github.com/angrymiao/go-openai"
 	"github.com/google/uuid"
-	"github.com/sashabaranov/go-openai"
 )
+
+type MCPResultHandler func(args interface{}) string
 
 // Connection 统一连接接口
 type Connection interface {
@@ -51,6 +53,12 @@ type Connection interface {
 	GetLastActiveTime() time.Time
 	// 检查是否过期
 	IsStale(timeout time.Duration) bool
+}
+
+// UDPInfoProvider 提供UDP配置信息的接口（可选）
+type UDPInfoProvider interface {
+	// 获取UDP配置信息
+	GetUDPInfo() (enabled bool, server, port, key, nonce string)
 }
 
 type configGetter interface {
@@ -73,6 +81,7 @@ type ConnectionHandler struct {
 		llm   providers.LLMProvider
 		tts   providers.TTSProvider
 		vlllm *vlllm.Provider // VLLLM提供者，可选
+		vad   providersvad.Provider
 	}
 
 	initailVoice string // 初始语音名称
@@ -90,6 +99,10 @@ type ConnectionHandler struct {
 	clientAudioChannels      int
 	clientAudioFrameDuration int
 
+	// 客户端UDP地址信息（用于NAT穿透）
+	clientPublicIP string // 客户端提供的公网IP
+	clientUDPPort  int    // 客户端UDP监听端口
+
 	serverAudioFormat        string // 服务端音频格式
 	serverAudioSampleRate    int
 	serverAudioChannels      int
@@ -98,6 +111,8 @@ type ConnectionHandler struct {
 	clientListenMode string
 	isDeviceVerified bool
 	closeAfterChat   bool
+	enableVAD        bool
+	vadState         *VADState // VAD状态管理器
 
 	// 语音处理相关
 	clientVoiceStop bool  // true客户端语音停止, 不再上传语音数据
@@ -115,13 +130,13 @@ type ConnectionHandler struct {
 	stopChan         chan struct{}
 	clientAudioQueue chan []byte
 	clientTextQueue  chan string
+	mcpMessageQueue  chan map[string]interface{}
 
 	// TTS任务队列
 	ttsQueue chan struct {
 		text      string
 		round     int // 轮次
 		textIndex int
-		filepath  string // 如果有path，就直接使用
 	}
 
 	audioMessagesQueue chan struct {
@@ -137,12 +152,13 @@ type ConnectionHandler struct {
 	functionRegister *function.FunctionRegistry
 	mcpManager       *mcp.Manager
 
-	// 用户AI配置服务
-	userConfigService services.UserAIConfigService
-	userID            string        // 从JWT中提取的用户ID
-	request           *http.Request // HTTP请求对象，用于获取用户配置等信息
+	// Bot配置服务（从好友表获取配置）
+	userConfigService botconfig.Service
+	userID            string             // 从JWT中提取的用户ID
+	request           *http.Request      // HTTP请求对象，用于获取用户配置等信息
+	userConfigs       []*types.BotConfig // 缓存用户Bot配置，避免重复查询
 
-	mcpResultHandlers map[string]func(interface{}) // MCP处理器映射
+	mcpResultHandlers map[string]func(args interface{}) // MCP处理器映射
 	ctx               context.Context
 }
 
@@ -161,11 +177,11 @@ func NewConnectionHandler(
 		stopChan:         make(chan struct{}),
 		clientAudioQueue: make(chan []byte, 100),
 		clientTextQueue:  make(chan string, 100),
+		mcpMessageQueue:  make(chan map[string]interface{}, 100),
 		ttsQueue: make(chan struct {
 			text      string
 			round     int // 轮次
 			textIndex int
-			filepath  string
 		}, 100),
 		audioMessagesQueue: make(chan struct {
 			filepath  string
@@ -189,6 +205,7 @@ func NewConnectionHandler(
 		headers: make(map[string]string),
 	}
 
+	var enableVADHeader string
 	for key, values := range req.Header {
 		if len(values) > 0 {
 			handler.headers[key] = values[0]
@@ -205,8 +222,8 @@ func NewConnectionHandler(
 		if key == "Transport-Type" {
 			handler.transportType = values[0]
 		}
-		if key == "User-Id" {
-			handler.userID = values[0]
+		if key == "Enable-VAD" {
+			enableVADHeader = values[0]
 		}
 		logger.Info("HTTP头部信息: %s: %s", key, values[0])
 	}
@@ -225,7 +242,29 @@ func NewConnectionHandler(
 		handler.providers.llm = providerSet.LLM
 		handler.providers.tts = providerSet.TTS
 		handler.providers.vlllm = providerSet.VLLLM
+		handler.providers.vad = providerSet.VAD
 		handler.mcpManager = providerSet.MCP
+	}
+
+	// VAD 默认不启用，只有在客户端明确传递 Enable-VAD: true 时才启用
+	handler.enableVAD = false
+	if enableVADHeader != "" {
+		lv := strings.ToLower(enableVADHeader)
+		if lv == "true" && handler.providers.vad != nil {
+			handler.enableVAD = true
+			logger.Info("客户端请求启用VAD")
+		} else if lv == "false" {
+			handler.enableVAD = false
+		}
+	}
+
+	// 初始化VAD状态管理器
+	// 默认帧大小：16000Hz * 2字节/采样 * 20ms / 1000 = 640字节
+	// 静音阈值：200ms
+	if handler.enableVAD {
+		handler.vadState = NewVADState(640, 200)
+		// 设置最大缓冲帧数为3帧
+		handler.vadState.SetMaxBufferFrames(3)
 	}
 
 	ttsProvider := "default" // 默认TTS提供者名称
@@ -238,9 +277,6 @@ func NewConnectionHandler(
 	logger.Info("使用TTS提供者: %s, 语音名称: %s", ttsProvider, voiceName)
 	handler.quickReplyCache = utils.NewQuickReplyCache(ttsProvider, voiceName)
 
-	// 初始化对话管理器
-	handler.dialogueManager = chat.NewDialogueManager(handler.logger, nil)
-	handler.dialogueManager.SetSystemMessage(config.DefaultPrompt)
 	handler.functionRegister = function.NewFunctionRegistry()
 	handler.initMCPResultHandlers()
 
@@ -251,14 +287,18 @@ func (h *ConnectionHandler) SetTaskCallback(callback func(func(*ConnectionHandle
 	h.safeCallbackFunc = callback
 }
 
-// SetUserConfigService 注入用户AI配置服务
-func (h *ConnectionHandler) SetUserConfigService(s services.UserAIConfigService) {
+// SetUserConfigService 注入Bot配置服务
+func (h *ConnectionHandler) SetUserConfigService(s botconfig.Service) {
 	h.userConfigService = s
 }
 
 // SetTaskManager 注入任务管理器
 func (h *ConnectionHandler) SetTaskManager(tm *task.TaskManager) {
 	h.taskMgr = tm
+}
+
+func (h *ConnectionHandler) SetUserID(id string) {
+	h.userID = id
 }
 
 func (h *ConnectionHandler) SubmitTask(taskType string, params map[string]interface{}) {
@@ -309,15 +349,29 @@ func (h *ConnectionHandler) Handle(conn Connection) {
 
 	h.conn = conn
 
-	// 在WebSocket连接建立后加载用户AI配置
-	// 此时用户已通过JWT认证，可以安全地加载用户配置
-	if h.request != nil {
-		h.loadUserAIConfigurations(h.request)
-	}
+	h.loadUserDialogueManager()
+	h.loadUserAIConfigurations()
+
+	// ========== 用户配置注入点 ==========
+	// 在这里可以注入用户级的 provider 配置
+	// 示例 1：LLM 配置
+	// userLLMConfig := &llm.Config{
+	// 	Temperature: 0.8,
+	// 	MaxTokens:   2000,
+	// }
+	// h.ApplyUserLLMConfig(userLLMConfig)
+	//
+	// 示例 2：TTS 配置
+	// userTTSConfig := &tts.Config{
+	// 	Voice: "zh-CN-XiaoxiaoNeural",
+	// }
+	// h.ApplyUserTTSConfig(userTTSConfig)
+	// ====================================
 
 	// 启动消息处理协程
 	go h.processClientAudioMessagesCoroutine() // 添加客户端音频消息处理协程
 	go h.processClientTextMessagesCoroutine()  // 添加客户端文本消息处理协程
+	go h.processMCPMessagesCoroutine()         // 添加MCP消息处理协程（独立于文本队列）
 	go h.processTTSQueueCoroutine()            // 添加TTS队列处理协程
 	go h.sendAudioMessageCoroutine()           // 添加音频消息发送协程
 
@@ -327,7 +381,7 @@ func (h *ConnectionHandler) Handle(conn Connection) {
 		return
 
 	} else {
-		h.LogInfo("使用从资源池获取的MCP管理器，快速绑定连接")
+		h.LogInfo("[MCP] [管理器] 使用资源池快速绑定连接")
 		// 池化的管理器已经预初始化，只需要绑定连接
 		params := map[string]interface{}{
 			"session_id": h.sessionID,
@@ -341,7 +395,7 @@ func (h *ConnectionHandler) Handle(conn Connection) {
 			return
 		}
 		// 不需要重新初始化服务器，只需要确保连接相关的服务正常
-		h.LogInfo("MCP管理器连接绑定完成，跳过重复初始化")
+		h.LogInfo("[MCP] [绑定] 连接绑定完成，跳过重复初始化")
 	}
 
 	// 主消息循环
@@ -377,7 +431,22 @@ func (h *ConnectionHandler) processClientTextMessagesCoroutine() {
 	}
 }
 
+// processMCPMessagesCoroutine 处理MCP消息队列（与文本处理并行）
+func (h *ConnectionHandler) processMCPMessagesCoroutine() {
+	for {
+		select {
+		case <-h.stopChan:
+			return
+		case msg := <-h.mcpMessageQueue:
+			if err := h.mcpManager.HandleAMMCPMessage(msg); err != nil {
+				h.LogError(fmt.Sprintf("处理MCP消息失败: %v", err))
+			}
+		}
+	}
+}
+
 // processClientAudioMessagesCoroutine 处理音频消息队列
+// 音频缓冲、VAD检测、空闲时间管理、静音检测
 func (h *ConnectionHandler) processClientAudioMessagesCoroutine() {
 	for {
 		select {
@@ -387,10 +456,162 @@ func (h *ConnectionHandler) processClientAudioMessagesCoroutine() {
 			if h.closeAfterChat {
 				continue
 			}
-			if err := h.providers.asr.AddAudio(audioData); err != nil {
+
+			// 如果启用VAD，则进行完整的VAD处理流程
+			if h.enableVAD && h.providers.vad != nil && h.vadState != nil {
+				h.processAudioWithVAD(audioData)
+			} else {
+				// 未启用VAD，直接送入ASR
+				if err := h.providers.asr.AddAudio(audioData); err != nil {
+					h.LogError(fmt.Sprintf("处理音频数据失败: %v", err))
+				}
+			}
+		}
+	}
+}
+
+// processAudioWithVAD 使用VAD处理音频数据
+// 完整逻辑：缓冲管理、VAD检测、空闲时间累计、静音检测
+func (h *ConnectionHandler) processAudioWithVAD(audioData []byte) {
+	// 获取音频参数
+	sr := h.clientAudioSampleRate
+	if sr <= 0 {
+		sr = 16000
+	}
+	frameMs := h.clientAudioFrameDuration
+	if frameMs <= 0 {
+		frameMs = 20
+	}
+
+	// 计算帧大小
+	bytesPerSample := 2 // 16位PCM
+	frameBytes := sr * bytesPerSample * frameMs / 1000
+	if frameBytes <= 0 {
+		frameBytes = 640 // 16000Hz * 2 * 20ms / 1000
+	}
+
+	// 更新VAD状态的帧大小（如果与配置不同）
+	// 注意：实际音频数据长度可能不是标准帧大小，需要动态调整
+	if len(audioData) > 0 && len(audioData) != h.vadState.frameSize {
+		h.vadState.frameSize = len(audioData)
+		h.LogInfo(fmt.Sprintf("动态调整VAD帧大小: %d字节 (基于实际音频数据长度)", len(audioData)))
+	}
+
+	// 根据实际音频数据大小计算真实的帧长度
+	// 公式：帧长度(ms) = 数据大小(字节) * 1000 / (采样率 * 每样本字节数)
+	actualFrameMs := frameMs
+	if len(audioData) > 0 {
+		calculatedFrameMs := len(audioData) * 1000 / (sr * bytesPerSample)
+		if calculatedFrameMs > 0 && calculatedFrameMs != frameMs {
+			actualFrameMs = calculatedFrameMs
+			h.LogInfo(fmt.Sprintf("根据实际数据计算帧长度: %dms (数据大小:%d字节, 配置:%dms)", actualFrameMs, len(audioData), frameMs))
+		}
+	}
+	if actualFrameMs <= 0 {
+		actualFrameMs = 20 // 默认20ms
+	}
+
+	// 每次处理一帧数据
+	vadCheckFrames := 1
+	h.vadState.SetVADCheckFrames(vadCheckFrames)
+
+	// 将音频数据添加到缓冲区
+	h.vadState.AddAudioData(audioData)
+
+	// 检查是否有足够的数据进行VAD检测
+	if !h.vadState.HasEnoughDataForVAD() {
+		// 数据不足，等待更多数据
+		return
+	}
+
+	// 获取用于VAD检测的数据（不删除缓冲区数据）
+	vadData := h.vadState.GetBufferedData(vadCheckFrames)
+
+	// 每次检测前重置VAD状态，避免状态累积
+	if resetter, ok := h.providers.vad.(interface{ Reset() error }); ok {
+		if err := resetter.Reset(); err != nil {
+			h.LogError(fmt.Sprintf("VAD重置失败: %v", err))
+		}
+	}
+
+	// 调用VAD检测（使用调整后的帧持续时间）
+	haveVoice, err := h.providers.vad.Process(vadData, sr, actualFrameMs)
+	if err != nil {
+		h.LogError(fmt.Sprintf("VAD检测失败: %v", err))
+		// VAD失败时，为了保险起见，假设有语音
+		haveVoice = true
+	}
+
+	// 获取当前语音状态
+	clientHaveVoice := h.vadState.GetHaveVoice()
+
+	// 处理首次检测到语音的情况
+	if haveVoice && !clientHaveVoice {
+		h.LogInfo("首次检测到语音活动")
+		// 首次检测到语音，将所有缓冲的音频数据送入ASR
+		allData := h.vadState.GetAndClearAllData()
+		if err := h.providers.asr.AddAudio(allData); err != nil {
+			h.LogError(fmt.Sprintf("处理音频数据失败: %v", err))
+		}
+
+		// 更新语音活动状态
+		h.vadState.SetHaveVoice(true)
+		h.vadState.SetHaveVoiceLastTime(time.Now().UnixMilli())
+		h.vadState.ResetIdleDuration()
+		return
+	}
+
+	// 如果已经检测到语音，后续音频直接送入ASR
+	if clientHaveVoice {
+		// 清空缓冲区并送入ASR
+		bufferedData := h.vadState.GetAndClearAllData()
+		if len(bufferedData) > 0 {
+			if err := h.providers.asr.AddAudio(bufferedData); err != nil {
 				h.LogError(fmt.Sprintf("处理音频数据失败: %v", err))
 			}
 		}
+
+		// 更新最后语音时间
+		if haveVoice {
+			h.vadState.SetHaveVoiceLastTime(time.Now().UnixMilli())
+			h.vadState.ResetIdleDuration()
+		} else {
+			// 当前帧无语音，累加空闲时间
+			h.vadState.AddIdleDuration(int64(frameMs))
+		}
+
+		// 检查是否进入静音状态（语音结束检测）
+		idleDuration := h.vadState.GetIdleDuration()
+		if h.vadState.IsSilence(idleDuration) {
+			h.LogInfo(fmt.Sprintf("检测到静音，空闲时间: %dms，触发语音结束", idleDuration))
+			h.vadState.SetVoiceStop(true)
+			// 可以在这里触发ASR的FinalResult或其他处理
+		}
+
+		return
+	}
+
+	// 如果之前没有语音，本次也没有语音
+	if !haveVoice && !clientHaveVoice {
+		// 累加空闲时间
+		h.vadState.AddIdleDuration(int64(frameMs))
+		idleDuration := h.vadState.GetIdleDuration()
+
+		// 检查是否超过最大空闲时间
+		maxIdleDuration := int64(30000) // 30秒
+		if idleDuration > maxIdleDuration {
+			h.LogInfo(fmt.Sprintf("超出最大空闲时长: %dms，可能需要断开连接", idleDuration))
+			// 这里可以根据需要决定是否断开连接
+		}
+
+		// 保留最近的N帧，删除更早的帧以避免缓冲区无限增长
+		maxBufferFrames := h.vadState.GetMaxBufferFrames()
+		if h.vadState.GetBufferedFrameCount() > vadCheckFrames*3 {
+			h.vadState.RemoveOldFrames(maxBufferFrames)
+		}
+
+		// 未检测到语音活动
+		// h.LogInfo("未检测到语音，空闲时间: %dms，缓冲帧数: %d", idleDuration, h.vadState.GetBufferedFrameCount())
 	}
 }
 
@@ -407,7 +628,7 @@ func (h *ConnectionHandler) sendAudioMessageCoroutine() {
 
 // OnAsrResult 实现 AsrEventListener 接口
 // 返回true则停止语音识别，返回false会继续语音识别
-func (h *ConnectionHandler) OnAsrResult(result string) bool {
+func (h *ConnectionHandler) OnAsrResult(result string, isFinalResult bool) bool {
 	//h.LogInfo(fmt.Sprintf("[%s] ASR识别结果: %s", h.clientListenMode, result))
 	if h.providers.asr.GetSilenceCount() >= 2 {
 		h.LogInfo("检测到连续两次静音，结束对话")
@@ -423,17 +644,24 @@ func (h *ConnectionHandler) OnAsrResult(result string) bool {
 		return true
 	} else if h.clientListenMode == "manual" {
 		h.client_asr_text += result
-		if result != "" {
-			h.LogInfo(fmt.Sprintf("[%s] ASR识别结果: %s", h.clientListenMode, h.client_asr_text))
-		}
-		if h.clientVoiceStop && h.client_asr_text != "" {
-			// 防止重复处理，只处理一次完整的ASR文本
-			asrText := h.client_asr_text
-			h.client_asr_text = "" // 清空文本，防止重复处理
-			h.handleChatMessage(context.Background(), asrText)
+		if isFinalResult {
+			h.handleChatMessage(context.Background(), h.client_asr_text)
 			return true
 		}
 		return false
+
+		// h.client_asr_text += result
+		// if result != "" {
+		// 	h.LogInfo(fmt.Sprintf("[%s] ASR识别结果: %s", h.clientListenMode, h.client_asr_text))
+		// }
+		// if h.clientVoiceStop && h.client_asr_text != "" {
+		// 	// 防止重复处理，只处理一次完整的ASR文本
+		// 	asrText := h.client_asr_text
+		// 	h.client_asr_text = "" // 清空文本，防止重复处理
+		// 	h.handleChatMessage(context.Background(), asrText)
+		// 	return true
+		// }
+		// return false
 	} else if h.clientListenMode == "realtime" {
 		if result == "" {
 			return false
@@ -715,16 +943,12 @@ func (h *ConnectionHandler) genResponseByLLM(ctx context.Context, messages []pro
 
 			} else {
 				// 处理普通函数调用
-				userFunCallConfig := models.UserAIConfig{}
-				if userFunConfig := h.request.Context().Value("user_configs"); userFunConfig != nil {
-					if configs, ok := userFunConfig.([]*models.UserAIConfig); ok {
-						h.logger.Info("获得上下文user_configs配置: %v", configs)
-
-						for _, v := range configs {
-							if v.FunctionName == functionName {
-								userFunCallConfig = *v
-								break
-							}
+				userFunCallConfig := types.BotConfig{}
+				if h.userConfigs != nil {
+					for _, v := range h.userConfigs {
+						if v.FunctionName == functionName {
+							userFunCallConfig = *v
+							break
 						}
 					}
 				}
@@ -863,7 +1087,7 @@ func (h *ConnectionHandler) processTTSQueueCoroutine() {
 		case <-h.stopChan:
 			return
 		case task := <-h.ttsQueue:
-			h.processTTSTask(task.text, task.textIndex, task.round, task.filepath)
+			h.processTTSTask(task.text, task.textIndex, task.round)
 		}
 	}
 }
@@ -901,7 +1125,8 @@ func (h *ConnectionHandler) deleteAudioFileIfNeeded(filepath string, reason stri
 }
 
 // processTTSTask 处理单个TTS任务
-func (h *ConnectionHandler) processTTSTask(text string, textIndex int, round int, filepath string) {
+func (h *ConnectionHandler) processTTSTask(text string, textIndex int, round int) {
+	filepath := ""
 	defer func() {
 		h.audioMessagesQueue <- struct {
 			filepath  string
@@ -910,9 +1135,6 @@ func (h *ConnectionHandler) processTTSTask(text string, textIndex int, round int
 			textIndex int
 		}{filepath, text, round, textIndex}
 	}()
-	if filepath != "" {
-		return
-	}
 
 	if utils.IsQuickReplyHit(text, h.config.QuickReplyWords) {
 		// 尝试从缓存查找音频文件
@@ -969,8 +1191,7 @@ func (h *ConnectionHandler) SpeakAndPlay(text string, textIndex int, round int) 
 			text      string
 			round     int
 			textIndex int
-			filepath  string
-		}{text, round, textIndex, ""}
+		}{text, round, textIndex}
 	}()
 
 	originText := text // 保存原始文本用于日志
@@ -1053,8 +1274,13 @@ func (h *ConnectionHandler) Close() {
 			h.providers.tts.SetVoice(h.initailVoice) // 恢复初始语音
 		}
 		if h.providers.asr != nil {
+			h.providers.asr.ResetSilenceCount() // 重置静音计数
 			if err := h.providers.asr.Reset(); err != nil {
 				h.LogError(fmt.Sprintf("重置ASR状态失败: %v", err))
+			}
+
+			if err := h.providers.asr.CloseConnection(); err != nil {
+				h.LogError(fmt.Sprintf("断开ASR状态失败: %v", err))
 			}
 		}
 		h.cleanTTSAndAudioQueue(true)
@@ -1135,75 +1361,77 @@ func (h *ConnectionHandler) genResponseByVLLM(ctx context.Context, messages []pr
 	return nil
 }
 
-// extractUserIDFromRequest 从HTTP请求中提取用户ID
-func (h *ConnectionHandler) extractUserIDFromRequest(req *http.Request) (string, error) {
-	// 从Authorization头部获取JWT token
-	authHeader := req.Header.Get("Authorization")
-	if authHeader == "" {
-		return "", nil // 没有Authorization头部，返回空字符串而不是错误
+func (h *ConnectionHandler) loadUserDialogueManager() {
+	if h.userID == "" {
+		h.logger.Debug("用户ID为空，跳过加载用户对话管理器")
+		return
 	}
 
-	// 移除"Bearer "前缀
-	token := strings.TrimPrefix(authHeader, "Bearer ")
-	if token == authHeader {
-		return "", fmt.Errorf("无效的Authorization头部格式")
+	// 根据配置选择对话记忆存储：postgres、redis
+	var memory chat.MemoryInterface
+	switch strings.ToLower(h.config.DialogStorage) {
+	case "postgres", "sqlite":
+		memory = chat.NewPostgresMemory(h.userID)
+	case "redis":
+		if h.config.RedisCache.Addr != "" {
+			if mem, err := chat.NewRedisMemory(h.config.RedisCache, h.logger, h.userID); err != nil {
+				h.logger.Warn("初始化Redis记忆失败: %v，使用内存模式", err)
+			} else {
+				memory = mem
+			}
+		} else {
+			h.logger.Warn("Redis未配置，回退到内存模式")
+		}
+	default:
+		h.logger.Warn("未选择对话存储模式")
 	}
 
-	// 使用auth包的VerifyToken方法验证JWT并提取用户ID
-	authToken := auth.NewAuthToken(h.config.Casbin.JWT.Key)
-
-	valid, deviceID, userID, err := authToken.VerifyToken(token)
-	if err != nil {
-		return "", fmt.Errorf("JWT验证失败: %v", err)
-	}
-	if !valid {
-		return "", fmt.Errorf("JWT无效")
-	}
-
-	h.logger.Debug("JWT验证成功，设备ID: %s, 用户ID: %d", deviceID, userID)
-	return fmt.Sprintf("%d", userID), nil
+	h.dialogueManager = chat.NewDialogueManager(h.logger, memory)
+	// 如果已有存储的历史，加载到管理器
+	// if memory != nil {
+	// 	if jsonStr, err := memory.QueryMemory(h.userID); err != nil {
+	// 		h.logger.Warn("查询对话记忆失败: %v", err)
+	// 	} else if jsonStr != "" {
+	// 		if err := h.dialogueManager.LoadFromJSON(jsonStr); err != nil {
+	// 			h.logger.Warn("加载对话记忆失败: %v", err)
+	// 		}
+	// 	}
+	// }
+	// 设置默认系统提示
+	h.dialogueManager.SetSystemMessage(h.config.DefaultPrompt)
 }
 
-// loadUserAIConfigurations 加载用户AI配置并注册到functionRegister
-func (h *ConnectionHandler) loadUserAIConfigurations(req *http.Request) {
+// loadUserAIConfigurations 加载用户Bot配置并注册到functionRegister（从好友表获取）
+func (h *ConnectionHandler) loadUserAIConfigurations() {
 	if h.userConfigService == nil {
-		h.logger.Error("用户AI配置服务未初始化，跳过加载")
+		h.logger.Error("Bot好友配置服务未初始化，跳过加载")
 		return
 	}
 	if h.userID == "" {
-		h.logger.Debug("用户ID为空，跳过加载用户AI配置")
+		h.logger.Debug("用户ID为空，跳过加载Bot配置")
 		return
 	}
 
-	// 首先尝试从请求上下文获取预加载的用户配置
-	if req != nil {
-		if preloadedConfigs := req.Context().Value("user_configs"); preloadedConfigs != nil {
-			if configs, ok := preloadedConfigs.([]*models.UserAIConfig); ok {
-				h.logger.Info("使用预加载的用户AI配置，配置数量: %d", len(configs))
-				h.registerUserConfigs(configs)
-				return
-			}
-		}
-	}
-
-	// 如果没有预加载的配置，则从数据库加载
-	h.logger.Debug("未找到预加载配置，从数据库加载用户AI配置")
+	// 从好友表加载Bot配置并缓存到 ConnectionHandler
+	h.logger.Info("从好友表加载用户Bot配置并缓存")
 	configs, err := h.userConfigService.GetUserConfigs(context.Background(), h.userID)
 	if err != nil {
-		h.logger.Error("加载用户AI配置失败: %v", err)
+		h.logger.Error("加载用户Bot配置失败: %v", err)
 		return
 	}
 
 	if len(configs) == 0 {
-		h.logger.Debug("用户 %s 没有自定义Function Call配置", h.userID)
+		h.logger.Debug("用户 %s 没有Bot好友配置", h.userID)
+		h.userConfigs = nil
 		return
 	}
 
+	h.userConfigs = configs
 	h.registerUserConfigs(configs)
 }
 
 // registerUserConfigs 注册用户配置到functionRegister
-func (h *ConnectionHandler) registerUserConfigs(configs []*models.UserAIConfig) {
+func (h *ConnectionHandler) registerUserConfigs(configs []*types.BotConfig) {
 	// 将用户配置转换为OpenAI工具格式并注册到functionRegister
 	for _, config := range configs {
 		if config.FunctionName != "" {
@@ -1221,8 +1449,8 @@ func (h *ConnectionHandler) registerUserConfigs(configs []*models.UserAIConfig) 
 	}
 }
 
-// convertConfigToOpenAITool 将用户AI配置转换为OpenAI工具格式
-func (h *ConnectionHandler) convertConfigToOpenAITool(config *models.UserAIConfig) *openai.Tool {
+// convertConfigToOpenAITool 将Bot配置转换为OpenAI工具格式
+func (h *ConnectionHandler) convertConfigToOpenAITool(config *types.BotConfig) *openai.Tool {
 	if config.FunctionName == "" {
 		return nil
 	}
@@ -1241,7 +1469,7 @@ func (h *ConnectionHandler) convertConfigToOpenAITool(config *models.UserAIConfi
 }
 
 // executeUserFunctionCall 执行用户自定义Function Call
-func (h *ConnectionHandler) executeUserFunctionCall(config *models.UserAIConfig, args map[string]interface{}) (types.FunctionCallResult, error) {
+func (h *ConnectionHandler) executeUserFunctionCall(config *types.BotConfig, args map[string]interface{}) (types.FunctionCallResult, error) {
 	h.logger.Info("执行用户自定义Function Call: %s", config.FunctionName)
 
 	// 检查是否有LLM配置参数
@@ -1256,7 +1484,7 @@ func (h *ConnectionHandler) executeUserFunctionCall(config *models.UserAIConfig,
 
 	// 构建LLM配置
 	llmConfig := &llm.Config{
-		Name:        config.ConfigName,
+		Name:        config.FunctionName,
 		Type:        config.LLMType,
 		ModelName:   config.ModelName,
 		BaseURL:     config.BaseURL,

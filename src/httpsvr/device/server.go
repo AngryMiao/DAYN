@@ -18,16 +18,20 @@ type DefaultDeviceService struct {
 	logger    *utils.Logger
 	config    *configs.Config
 	authToken *auth.AuthToken
-	deviceDB  *DeviceBindDB
+	deviceDB  *DeviceDB
 }
 
 // NewDefaultDeviceService 构造函数
 func NewDefaultDeviceService(config *configs.Config, logger *utils.Logger) *DefaultDeviceService {
-	// 初始化AuthToken
-	authToken := auth.NewAuthToken(config.Server.Token)
+	// 初始化AuthToken，使用配置中的 topic_root
+	topicRoot := config.Transport.Mqtt.TopicRoot
+	if topicRoot == "" {
+		topicRoot = "am_topic" // 默认值
+	}
+	authToken := auth.NewAuthTokenWithConfig(config.Server.Token, topicRoot)
 
 	// 初始化设备绑定数据库操作
-	deviceDB := NewDeviceBindDB()
+	deviceDB := NewDeviceDB()
 
 	return &DefaultDeviceService{
 		logger:    logger,
@@ -38,33 +42,10 @@ func NewDefaultDeviceService(config *configs.Config, logger *utils.Logger) *Defa
 }
 
 // Start 注册 Device 相关路由
-func (s *DefaultDeviceService) Start(ctx context.Context, engine *gin.Engine, apiGroup *gin.RouterGroup) error {
-	apiGroup.OPTIONS("/device/", s.handleDeviceOptions)
+func (s *DefaultDeviceService) Start(ctx context.Context, engine *gin.Engine, apiGroup *gin.RouterGroup) {
 	apiGroup.POST("/device/bind", s.handleDeviceBind)
 	apiGroup.POST("/device/unbind", s.handleDeviceUnbind)
 	apiGroup.GET("/device/refresh_token", s.handleDeviceRefToken)
-
-	return nil
-}
-
-// addCORSHeaders 添加CORS头
-func (s *DefaultDeviceService) addCORSHeaders(c *gin.Context) {
-	c.Header("Access-Control-Allow-Headers", "client-id, content-type, device-id, authorization")
-	c.Header("Access-Control-Allow-Credentials", "true")
-	c.Header("Access-Control-Allow-Origin", "*")
-	c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-}
-
-// @Summary Device 预检请求
-// @Description 处理 Device 接口的 OPTIONS 预检请求，返回 200
-// @Tags Device
-// @Accept */*
-// @Produce plain
-// @Success 200 {string} string "OK"
-// @Router /device/ [options]
-func (s *DefaultDeviceService) handleDeviceOptions(c *gin.Context) {
-	s.addCORSHeaders(c)
-	c.Status(http.StatusOK)
 }
 
 // @Summary 刷新设备token
@@ -81,8 +62,6 @@ func (s *DefaultDeviceService) handleDeviceOptions(c *gin.Context) {
 // @Failure 500 {object} RefreshTokenResponse "服务器内部错误"
 // @Router /device/refresh_token [get]
 func (s *DefaultDeviceService) handleDeviceRefToken(c *gin.Context) {
-	s.addCORSHeaders(c)
-
 	// 获取get请求参数
 	deviceID := c.Query("device_id")
 	if deviceID == "" {
@@ -102,7 +81,7 @@ func (s *DefaultDeviceService) handleDeviceRefToken(c *gin.Context) {
 		return
 	}
 
-	deviceInfo, err := s.deviceDB.GetDeviceBind(deviceID)
+	deviceInfo, err := s.deviceDB.GetDevice(deviceID)
 	if err != nil {
 		s.respondError(c, http.StatusInternalServerError, "设备不存在")
 		return
@@ -139,11 +118,10 @@ func (s *DefaultDeviceService) handleDeviceRefToken(c *gin.Context) {
 	s.logger.Info("刷新设备token成功 - 用户ID: %d, 设备ID: %s", deviceInfo.UserID, deviceID)
 
 	// 返回成功响应
-	response := RefreshTokenResponse{
+	utils.Custom(c, http.StatusOK, RefreshTokenResponse{
 		Success: true,
 		Token:   newToken,
-	}
-	c.JSON(http.StatusOK, response)
+	})
 }
 
 // @Summary 设备绑定
@@ -159,9 +137,6 @@ func (s *DefaultDeviceService) handleDeviceRefToken(c *gin.Context) {
 // @Failure 500 {object} BindDeviceResponse "服务器内部错误"
 // @Router /device/bind [post]
 func (s *DefaultDeviceService) handleDeviceBind(c *gin.Context) {
-	s.addCORSHeaders(c)
-	c.Status(http.StatusOK)
-
 	// 验证认证
 	authHeader := c.GetHeader("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
@@ -219,7 +194,7 @@ func (s *DefaultDeviceService) handleDeviceBind(c *gin.Context) {
 	}
 
 	// 保存绑定信息到数据库
-	if err := s.deviceDB.SaveDeviceBind(body.DeviceID, userID, bindKey); err != nil {
+	if err := s.deviceDB.SaveDevice(body.DeviceID, userID, bindKey); err != nil {
 		s.logger.Error("保存设备绑定信息失败: %v", err)
 		s.respondError(c, http.StatusInternalServerError, "保存绑定信息失败")
 		return
@@ -228,12 +203,11 @@ func (s *DefaultDeviceService) handleDeviceBind(c *gin.Context) {
 	s.logger.Info("设备绑定成功 - 用户ID: %d, 设备ID: %s", userID, body.DeviceID)
 
 	// 返回成功响应
-	response := BindDeviceResponse{
+	utils.Custom(c, http.StatusOK, BindDeviceResponse{
 		Success:   true,
 		DeviceKey: bindKey,
 		Token:     deviceToken,
-	}
-	c.JSON(http.StatusOK, response)
+	})
 }
 
 // handleDeviceUnbind 处理设备解绑请求
@@ -249,9 +223,6 @@ func (s *DefaultDeviceService) handleDeviceBind(c *gin.Context) {
 // @Failure 500 {object} UnbindDeviceResponse "服务器内部错误"
 // @Router /device/unbind [post]
 func (s *DefaultDeviceService) handleDeviceUnbind(c *gin.Context) {
-	// 添加CORS头
-	s.addCORSHeaders(c)
-
 	// 解析请求体
 	var body UnbindDeviceRequest
 	if err := c.ShouldBindJSON(&body); err != nil {
@@ -268,7 +239,7 @@ func (s *DefaultDeviceService) handleDeviceUnbind(c *gin.Context) {
 	}
 
 	// 检查设备是否存在且已绑定
-	existingBind, err := s.deviceDB.GetDeviceBind(body.DeviceID)
+	existingBind, err := s.deviceDB.GetDevice(body.DeviceID)
 	if err != nil {
 		s.logger.Error("查询设备绑定信息失败: %v", err)
 		s.respondUnbindError(c, http.StatusNotFound, "设备未找到或未绑定")
@@ -290,27 +261,24 @@ func (s *DefaultDeviceService) handleDeviceUnbind(c *gin.Context) {
 	s.logger.Info("设备解绑成功: %s (用户ID: %d)", body.DeviceID, existingBind.UserID)
 
 	// 返回成功响应
-	response := UnbindDeviceResponse{
+	utils.Custom(c, http.StatusOK, UnbindDeviceResponse{
 		Success: true,
 		Message: "设备解绑成功",
-	}
-	c.JSON(http.StatusOK, response)
+	})
 }
 
 // respondUnbindError 返回解绑错误响应
 func (s *DefaultDeviceService) respondUnbindError(c *gin.Context, statusCode int, message string) {
-	response := UnbindDeviceResponse{
+	utils.Custom(c, statusCode, UnbindDeviceResponse{
 		Success: false,
 		Message: message,
-	}
-	c.JSON(statusCode, response)
+	})
 }
 
 // respondError 返回错误响应
 func (s *DefaultDeviceService) respondError(c *gin.Context, statusCode int, message string) {
-	response := BindDeviceResponse{
+	utils.Custom(c, statusCode, BindDeviceResponse{
 		Success: false,
 		Message: message,
-	}
-	c.JSON(statusCode, response)
+	})
 }

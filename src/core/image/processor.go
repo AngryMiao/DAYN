@@ -61,20 +61,20 @@ func NewImageProcessor(config *configs.VLLMConfig, logger *utils.Logger) (*Image
 }
 
 // ProcessImage 处理图片数据，返回base64编码的图片
-func (p *ImageProcessor) ProcessImage(ctx context.Context, imageData ImageData) (string, error) {
+func (p *ImageProcessor) ProcessImage(ctx context.Context, imageData ImageData) (ImageData, error) {
 	atomic.AddInt64(&p.metrics.TotalProcessed, 1)
 
 	var finalImageData ImageData
 
 	// 根据输入类型处理图片
-	if imageData.URL != "" {
+	if imageData.URL != "" && p.config.Type == "ollama" {
 		// 处理URL类型图片
 		atomic.AddInt64(&p.metrics.URLDownloads, 1)
 
 		base64Data, err := p.processURLImage(ctx, imageData.URL, imageData.Format)
 		if err != nil {
 			atomic.AddInt64(&p.metrics.FailedValidations, 1)
-			return "", fmt.Errorf("URL图片处理失败: %v", err)
+			return finalImageData, fmt.Errorf("URL图片处理失败: %v", err)
 		}
 
 		finalImageData = ImageData{
@@ -96,8 +96,11 @@ func (p *ImageProcessor) ProcessImage(ctx context.Context, imageData ImageData) 
 			"format":      imageData.Format,
 			"data_length": len(imageData.Data),
 		})
+	} else if imageData.URL != "" && p.config.Type == "openai" {
+		finalImageData.URL = imageData.URL
+		return finalImageData, nil
 	} else {
-		return "", fmt.Errorf("图片数据为空：既没有URL也没有base64数据")
+		return finalImageData, fmt.Errorf("图片数据为空：既没有URL也没有base64数据")
 	}
 
 	// 安全验证
@@ -112,7 +115,7 @@ func (p *ImageProcessor) ProcessImage(ctx context.Context, imageData ImageData) 
 				"format":        finalImageData.Format,
 			})
 		}
-		return "", fmt.Errorf("图片验证失败: %v", validationResult.Error)
+		return finalImageData, fmt.Errorf("图片验证失败: %v", validationResult.Error)
 	}
 
 	p.logger.Debug("图片处理完成 %v", map[string]interface{}{
@@ -122,7 +125,7 @@ func (p *ImageProcessor) ProcessImage(ctx context.Context, imageData ImageData) 
 		"file_size": validationResult.FileSize,
 	})
 
-	return finalImageData.Data, nil
+	return finalImageData, nil
 }
 
 // processURLImage 处理URL图片

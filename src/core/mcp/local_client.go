@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/sashabaranov/go-openai"
+	"github.com/angrymiao/go-openai"
 )
 
 type HandlerFunc func(ctx context.Context, args map[string]interface{}) (interface{}, error)

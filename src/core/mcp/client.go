@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/angrymiao/go-openai"
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/sashabaranov/go-openai"
 )
 
 // Config 定义MCP客户端配置

@@ -46,6 +46,20 @@ definitions:
       success:
         type: boolean
     type: object
+  models.AddBotFriendRequest:
+    properties:
+      alias:
+        type: string
+      app_key:
+        type: string
+      bot_config_id:
+        type: integer
+      priority:
+        type: integer
+    required:
+    - app_key
+    - bot_config_id
+    type: object
   models.CreateAIConfigRequest:
     properties:
       api_key:
@@ -79,6 +93,42 @@ definitions:
     - config_name
     - function_name
     type: object
+  models.CreateBotConfigRequest:
+    properties:
+      config_name:
+        type: string
+      description:
+        type: string
+      function_name:
+        minLength: 1
+        type: string
+      max_tokens:
+        type: integer
+      mcp_server_url:
+        type: string
+      model_id:
+        type: integer
+      parameters:
+        additionalProperties: true
+        type: object
+      temperature:
+        type: number
+      visibility:
+        description: private/public
+        type: string
+    required:
+    - config_name
+    - description
+    - function_name
+    - model_id
+    type: object
+  models.ToggleBotFriendStatusRequest:
+    properties:
+      is_active:
+        type: boolean
+    required:
+    - is_active
+    type: object
   models.UpdateAIConfigRequest:
     properties:
       api_key:
@@ -109,50 +159,186 @@ definitions:
       temperature:
         type: number
     type: object
-  ota.ErrorResponse:
+  models.UpdateBotConfigRequest:
     properties:
-      message:
-        example: 缺少 device-id
+      config_name:
         type: string
-      success:
-        example: false
-        type: boolean
+      description:
+        type: string
+      function_name:
+        type: string
+      max_tokens:
+        type: integer
+      mcp_server_url:
+        type: string
+      parameters:
+        additionalProperties: true
+        type: object
+      temperature:
+        type: number
+      visibility:
+        type: string
     type: object
-  ota.OtaFirmwareResponse:
+  models.UpdateBotFriendAppKeyRequest:
     properties:
-      firmware:
-        properties:
-          url:
-            example: /ota_bin/1.0.3.bin
-            type: string
-          version:
-            example: 1.0.3
-            type: string
-        type: object
-      server_time:
-        properties:
-          timestamp:
-            example: 1688443200000
-            type: integer
-          timezone_offset:
-            example: 480
-            type: integer
-        type: object
-      websocket:
-        properties:
-          url:
-            example: wss://example.com/ota
-            type: string
-        type: object
+      app_key:
+        type: string
+    required:
+    - app_key
     type: object
-  ota.OtaRequest:
+  models.UpdateBotFriendPriorityRequest:
+    properties:
+      priority:
+        type: integer
+    required:
+    - priority
+    type: object
+  ota.Activation:
+    properties:
+      challenge:
+        description: 用于设备认证挑战
+        type: string
+      code:
+        example: "543091"
+        type: string
+      message:
+        type: string
+    type: object
+  ota.FirmwareInfo:
+    properties:
+      url:
+        example: /ota_bin/1.2.4.bin
+        type: string
+      version:
+        example: 1.2.4
+        type: string
+    type: object
+  ota.MQTTInfo:
+    properties:
+      client_id:
+        example: CGID_test@@@mac@@@client
+        type: string
+      endpoint:
+        example: mqtt://broker:1883
+        type: string
+      password:
+        example: randomPwd
+        type: string
+      publish_topic:
+        example: device-server
+        type: string
+      subscribe_topic:
+        example: "null"
+        type: string
+      username:
+        example: base64string
+        type: string
+    type: object
+  ota.OTARequestBody:
     properties:
       application:
         properties:
+          compile_time:
+            type: string
+          elf_sha256:
+            type: string
+          idf_version:
+            type: string
+          name:
+            type: string
           version:
-            example: 1.0.0
             type: string
         type: object
+      board:
+        properties:
+          channel:
+            type: integer
+          ip:
+            type: string
+          mac:
+            type: string
+          name:
+            type: string
+          rssi:
+            type: integer
+          ssid:
+            type: string
+          type:
+            type: string
+        type: object
+      chip_info:
+        properties:
+          cores:
+            type: integer
+          features:
+            type: integer
+          model:
+            type: integer
+          revision:
+            type: integer
+        type: object
+      chip_model_name:
+        type: string
+      flash_size:
+        type: number
+      language:
+        type: string
+      mac_address:
+        type: string
+      minimum_free_heap_size:
+        type: string
+      ota:
+        properties:
+          label:
+            type: string
+        type: object
+      partition_table:
+        items:
+          properties:
+            address:
+              type: number
+            label:
+              type: string
+            size:
+              type: number
+            subtype:
+              type: integer
+            type:
+              type: integer
+          type: object
+        type: array
+      uuid:
+        type: string
+      version:
+        type: integer
+    type: object
+  ota.OTAResponse:
+    properties:
+      activation:
+        $ref: '#/definitions/ota.Activation'
+      firmware:
+        $ref: '#/definitions/ota.FirmwareInfo'
+      mqtt:
+        $ref: '#/definitions/ota.MQTTInfo'
+      server_time:
+        $ref: '#/definitions/ota.ServerTimeInfo'
+      websocket:
+        $ref: '#/definitions/ota.WebSocketInfo'
+    type: object
+  ota.ServerTimeInfo:
+    properties:
+      timestamp:
+        example: 1720065289451
+        type: integer
+      timezone_offset:
+        example: 480
+        type: integer
+    type: object
+  ota.WebSocketInfo:
+    properties:
+      url:
+        example: wss://your-server/ws
+        type: string
     type: object
 host: localhost:8080
 info:
@@ -164,7 +350,8 @@ paths:
     get:
       consumes:
       - application/json
-      description: 获取当前用户的所有AI配置
+      deprecated: true
+      description: 获取当前用户的所有AI配置（已废弃，请使用 /api/app/friends/bots）
       produces:
       - application/json
       responses:
@@ -173,23 +360,19 @@ paths:
           schema:
             additionalProperties: true
             type: object
-        "400":
-          description: 请求参数错误
-          schema:
-            additionalProperties: true
-            type: object
         "500":
           description: 服务器内部错误
           schema:
             additionalProperties: true
             type: object
-      summary: 获取用户AI配置列表
+      summary: 获取用户AI配置列表（已废弃）
       tags:
-      - AI配置管理
+      - AI配置管理（已废弃）
     post:
       consumes:
       - application/json
-      description: 创建新的AI配置
+      deprecated: true
+      description: 创建新的AI配置（已废弃，请使用 /api/v2/bots + /api/app/friends/bots）
       parameters:
       - description: 配置信息
         in: body
@@ -215,16 +398,534 @@ paths:
           schema:
             additionalProperties: true
             type: object
-      summary: 创建AI配置
+      summary: 创建AI配置（已废弃）
       tags:
-      - AI配置管理
+      - AI配置管理（已废弃）
   /api/ai-configs/{id}:
+    delete:
+      deprecated: true
+      responses: {}
+      summary: 删除AI配置（已废弃）
+    get:
+      deprecated: true
+      description: 根据配置ID获取配置详情（已废弃）
+      responses: {}
+      summary: 获取配置详情（已废弃）
+      tags:
+      - AI配置管理（已废弃）
+    put:
+      deprecated: true
+      responses: {}
+      summary: 更新AI配置（已废弃）
+  /api/ai-configs/{id}/priority:
+    patch:
+      deprecated: true
+      responses: {}
+      summary: 设置配置优先级（已废弃）
+  /api/ai-configs/{id}/toggle:
+    patch:
+      deprecated: true
+      responses: {}
+      summary: 切换配置状态（已废弃）
+  /api/app/friends/bots:
+    get:
+      consumes:
+      - application/json
+      description: 获取用户的所有Bot好友
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: 服务器内部错误
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 获取Bot好友列表
+      tags:
+      - 用户好友管理
+    post:
+      consumes:
+      - application/json
+      description: 添加Bot为好友
+      parameters:
+      - description: 好友信息
+        in: body
+        name: friend
+        required: true
+        schema:
+          $ref: '#/definitions/models.AddBotFriendRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: 添加成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: 服务器内部错误
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 添加Bot好友
+      tags:
+      - 用户好友管理
+  /api/app/friends/bots/{bot_config_id}:
     delete:
       consumes:
       - application/json
-      description: 删除指定的AI配置
+      description: 删除Bot好友关系
       parameters:
-      - description: 配置ID
+      - description: Bot配置ID
+        in: path
+        name: bot_config_id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 删除成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: 好友不存在
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: 服务器内部错误
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 删除Bot好友
+      tags:
+      - 用户好友管理
+  /api/app/friends/bots/{bot_config_id}/appkey:
+    patch:
+      consumes:
+      - application/json
+      description: 更新Bot好友的LLM API密钥
+      parameters:
+      - description: Bot配置ID
+        in: path
+        name: bot_config_id
+        required: true
+        type: integer
+      - description: AppKey信息
+        in: body
+        name: appkey
+        required: true
+        schema:
+          $ref: '#/definitions/models.UpdateBotFriendAppKeyRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 更新成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: 好友不存在
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: 服务器内部错误
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 更新Bot好友的AppKey
+      tags:
+      - 用户好友管理
+  /api/app/friends/bots/{bot_config_id}/priority:
+    patch:
+      consumes:
+      - application/json
+      description: 更新Bot好友的优先级
+      parameters:
+      - description: Bot配置ID
+        in: path
+        name: bot_config_id
+        required: true
+        type: integer
+      - description: 优先级信息
+        in: body
+        name: priority
+        required: true
+        schema:
+          $ref: '#/definitions/models.UpdateBotFriendPriorityRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 更新成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: 好友不存在
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: 服务器内部错误
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 更新Bot好友优先级
+      tags:
+      - 用户好友管理
+  /api/app/friends/bots/{bot_config_id}/toggle:
+    patch:
+      consumes:
+      - application/json
+      description: 启用或禁用Bot好友
+      parameters:
+      - description: Bot配置ID
+        in: path
+        name: bot_config_id
+        required: true
+        type: integer
+      - description: 状态信息
+        in: body
+        name: status
+        required: true
+        schema:
+          $ref: '#/definitions/models.ToggleBotFriendStatusRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 操作成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: 好友不存在
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: 服务器内部错误
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 切换Bot好友状态
+      tags:
+      - 用户好友管理
+  /api/v2/bots:
+    post:
+      consumes:
+      - application/json
+      description: 创建新的Bot配置
+      parameters:
+      - description: 配置信息
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/models.CreateBotConfigRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: 创建成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: 服务器内部错误
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 创建Bot配置
+      tags:
+      - Bot配置管理
+  /api/v2/bots/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: 删除指定的Bot配置
+      parameters:
+      - description: Bot配置ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 删除成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: 无权限
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: 配置不存在
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: 服务器内部错误
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 删除Bot配置
+      tags:
+      - Bot配置管理
+    get:
+      consumes:
+      - application/json
+      description: 根据ID获取Bot配置详情
+      parameters:
+      - description: Bot配置ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: 配置不存在
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: 服务器内部错误
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 获取Bot配置详情
+      tags:
+      - Bot配置管理
+    put:
+      consumes:
+      - application/json
+      description: 更新指定的Bot配置
+      parameters:
+      - description: Bot配置ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: 更新信息
+        in: body
+        name: config
+        required: true
+        schema:
+          $ref: '#/definitions/models.UpdateBotConfigRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 更新成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: 无权限
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: 配置不存在
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: 服务器内部错误
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 更新Bot配置
+      tags:
+      - Bot配置管理
+  /api/v2/bots/my:
+    get:
+      consumes:
+      - application/json
+      description: 获取当前用户创建的所有Bot配置
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: 服务器内部错误
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 获取我创建的Bot列表
+      tags:
+      - Bot配置管理
+  /api/v2/bots/search:
+    get:
+      consumes:
+      - application/json
+      description: 搜索Bot配置，支持bot_hash精确搜索和bot_name模糊搜索
+      parameters:
+      - description: 搜索关键词
+        in: query
+        name: query
+        required: true
+        type: string
+      - description: 搜索类型：hash/name/description，默认为name
+        in: query
+        name: search_type
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: 服务器内部错误
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 搜索Bot配置
+      tags:
+      - Bot配置管理
+  /api/v2/models:
+    get:
+      consumes:
+      - application/json
+      description: 获取模型配置列表
+      parameters:
+      - description: 是否只包含公共模型
+        in: query
+        name: include_public
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 成功
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: 服务器内部错误
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 获取模型配置列表
+      tags:
+      - 模型配置管理
+    post:
+      consumes:
+      - application/json
+      description: 创建新的模型配置
+      parameters:
+      - description: 模型配置信息
+        in: body
+        name: model
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: 创建成功
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: 服务器内部错误
+          schema:
+            additionalProperties: true
+            type: object
+      summary: 创建模型配置
+      tags:
+      - 模型配置管理
+  /api/v2/models/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: 删除指定的模型配置（软删除）
+      parameters:
+      - description: 模型配置ID
         in: path
         name: id
         required: true
@@ -252,15 +953,15 @@ paths:
           schema:
             additionalProperties: true
             type: object
-      summary: 删除AI配置
+      summary: 删除模型配置
       tags:
-      - AI配置管理
+      - 模型配置管理
     get:
       consumes:
       - application/json
-      description: 根据配置ID获取配置详情
+      description: 根据ID获取模型配置详情
       parameters:
-      - description: 配置ID
+      - description: 模型配置ID
         in: path
         name: id
         required: true
@@ -288,25 +989,25 @@ paths:
           schema:
             additionalProperties: true
             type: object
-      summary: 获取配置详情
+      summary: 获取模型配置详情
       tags:
-      - AI配置管理
+      - 模型配置管理
     put:
       consumes:
       - application/json
-      description: 更新指定的AI配置
+      description: 更新指定的模型配置
       parameters:
-      - description: 配置ID
+      - description: 模型配置ID
         in: path
         name: id
         required: true
         type: integer
       - description: 更新信息
         in: body
-        name: config
+        name: model
         required: true
         schema:
-          $ref: '#/definitions/models.UpdateAIConfigRequest'
+          type: object
       produces:
       - application/json
       responses:
@@ -330,114 +1031,9 @@ paths:
           schema:
             additionalProperties: true
             type: object
-      summary: 更新AI配置
+      summary: 更新模型配置
       tags:
-      - AI配置管理
-  /api/ai-configs/{id}/priority:
-    patch:
-      consumes:
-      - application/json
-      description: 设置指定AI配置的优先级
-      parameters:
-      - description: 配置ID
-        in: path
-        name: id
-        required: true
-        type: integer
-      - description: 优先级信息
-        in: body
-        name: priority
-        required: true
-        schema:
-          additionalProperties:
-            type: integer
-          type: object
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 操作成功
-          schema:
-            additionalProperties: true
-            type: object
-        "400":
-          description: 请求参数错误
-          schema:
-            additionalProperties: true
-            type: object
-        "404":
-          description: 配置不存在
-          schema:
-            additionalProperties: true
-            type: object
-        "500":
-          description: 服务器内部错误
-          schema:
-            additionalProperties: true
-            type: object
-      summary: 设置配置优先级
-      tags:
-      - AI配置管理
-  /api/ai-configs/{id}/toggle:
-    patch:
-      consumes:
-      - application/json
-      description: 启用或禁用指定的AI配置
-      parameters:
-      - description: 配置ID
-        in: path
-        name: id
-        required: true
-        type: integer
-      - description: 状态信息
-        in: body
-        name: status
-        required: true
-        schema:
-          additionalProperties:
-            type: boolean
-          type: object
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 操作成功
-          schema:
-            additionalProperties: true
-            type: object
-        "400":
-          description: 请求参数错误
-          schema:
-            additionalProperties: true
-            type: object
-        "404":
-          description: 配置不存在
-          schema:
-            additionalProperties: true
-            type: object
-        "500":
-          description: 服务器内部错误
-          schema:
-            additionalProperties: true
-            type: object
-      summary: 切换配置状态
-      tags:
-      - AI配置管理
-  /device/:
-    options:
-      consumes:
-      - '*/*'
-      description: 处理 Device 接口的 OPTIONS 预检请求，返回 200
-      produces:
-      - text/plain
-      responses:
-        "200":
-          description: OK
-          schema:
-            type: string
-      summary: Device 预检请求
-      tags:
-      - Device
+      - 模型配置管理
   /device/bind:
     post:
       consumes:
@@ -555,32 +1151,6 @@ paths:
       tags:
       - Device
   /ota/:
-    get:
-      description: 获取 OTA 服务状态和 WebSocket 地址，供设备查询
-      produces:
-      - text/plain
-      responses:
-        "200":
-          description: 'OTA interface is running, websocket address: ws://...'
-          schema:
-            type: string
-      summary: 获取 OTA 状态
-      tags:
-      - OTA
-    options:
-      consumes:
-      - '*/*'
-      description: 处理 OTA 接口的 OPTIONS 预检请求，返回 200
-      produces:
-      - text/plain
-      responses:
-        "200":
-          description: OK
-          schema:
-            type: string
-      summary: OTA 预检请求
-      tags:
-      - OTA
     post:
       consumes:
       - application/json
@@ -596,40 +1166,20 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/ota.OtaRequest'
+          $ref: '#/definitions/ota.OTARequestBody'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/ota.OtaFirmwareResponse'
+            $ref: '#/definitions/ota.OTAResponse'
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/ota.ErrorResponse'
+            additionalProperties: true
+            type: object
       summary: 上传设备信息获取最新固件
-      tags:
-      - OTA
-  /ota_bin/{filename}:
-    get:
-      description: 根据文件名下载 OTA 固件
-      parameters:
-      - description: 固件文件名
-        in: path
-        name: filename
-        required: true
-        type: string
-      produces:
-      - application/octet-stream
-      responses:
-        "200":
-          description: 文件流
-        "404":
-          description: Not Found
-          schema:
-            $ref: '#/definitions/ota.ErrorResponse'
-      summary: 下载 OTA 固件文件
       tags:
       - OTA
 swagger: "2.0"

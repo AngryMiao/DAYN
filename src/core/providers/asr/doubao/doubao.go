@@ -100,27 +100,40 @@ func NewProvider(config *asr.Config, deleteFile bool, logger *utils.Logger) (*Pr
 	if outputDir == "" {
 		outputDir = "tmp/"
 	}
-	if err := os.MkdirAll(outputDir, 0755); err != nil {
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return nil, fmt.Errorf("创建输出目录失败: %v", err)
 	}
 
 	// 创建连接ID
 	connectID := fmt.Sprintf("%d", time.Now().UnixNano())
+	// 从配置中读取end_window_size，如果没有设置则使用默认值400
+	endWindowSize := 400 // 默认值
+	if configEndWindowSize, ok := config.Data["end_window_size"]; ok {
+		switch v := configEndWindowSize.(type) {
+		case float64:
+			endWindowSize = int(v)
+		case int:
+			endWindowSize = v
+		case int64:
+			endWindowSize = int(v)
+		}
+	}
 
+	url := "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream"
 	provider := &Provider{
 		BaseProvider:  base,
 		appID:         appID,
 		accessToken:   accessToken,
 		outputDir:     outputDir,
 		host:          "openspeech.bytedance.com",
-		wsURL:         "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream",
+		wsURL:         url,
 		chunkDuration: 200, // 固定使用200ms分片
 		connectID:     connectID,
 		logger:        logger, // 使用简单的logger
 
 		// 默认配置
 		modelName:     "bigmodel",
-		endWindowSize: 800,
+		endWindowSize: endWindowSize,
 		enablePunc:    true,
 		enableITN:     true,
 		enableDDC:     false,
@@ -132,34 +145,6 @@ func NewProvider(config *asr.Config, deleteFile bool, logger *utils.Logger) (*Pr
 	return provider, nil
 }
 
-// 读取根目录下的mp3文件，测试Transcribe方法
-func (p *Provider) TestTranscribe() (string, error) {
-	// 读取音频文件
-	audioFile := "700.mp3" // 替换为实际的音频文件路径
-
-	pcmData, err := utils.MP3ToPCMData(audioFile)
-	if err != nil {
-		fmt.Println("MP3转PCM失败: ", err.Error())
-	}
-	monoPcmDataBytes := []byte{}
-	if len(pcmData) > 0 {
-		monoPcmDataBytes = pcmData[0] // 提取第一个切片
-		fmt.Printf("提取的单声道PCM数据长度: %d 字节\n", len(monoPcmDataBytes))
-
-	} else {
-		fmt.Println("没有PCM数据可提取")
-	}
-
-	result, err := p.Transcribe(context.Background(), monoPcmDataBytes)
-	if err != nil {
-		fmt.Println("转录失败: ", err.Error())
-	} else {
-		fmt.Print("result is ", result, "\n")
-	}
-
-	return result, nil
-}
-
 // Transcribe 实现asr.Provider接口的转录方法
 func (p *Provider) Transcribe(ctx context.Context, audioData []byte) (string, error) {
 	if p.isStreaming {
@@ -168,7 +153,7 @@ func (p *Provider) Transcribe(ctx context.Context, audioData []byte) (string, er
 
 	// 创建临时文件
 	tempFile := filepath.Join(p.outputDir, fmt.Sprintf("temp_%d.wav", time.Now().UnixNano()))
-	if err := os.WriteFile(tempFile, audioData, 0644); err != nil {
+	if err := os.WriteFile(tempFile, audioData, 0o644); err != nil {
 		return "", fmt.Errorf("保存临时文件失败: %v", err)
 	}
 	defer func() {
@@ -232,51 +217,114 @@ func (p *Provider) GetAudioBuffer() *bytes.Buffer {
 	return p.BaseProvider.GetAudioBuffer()
 }
 
+type AsrResponsePayload struct {
+	AudioInfo struct {
+		Duration int `json:"duration"`
+	} `json:"audio_info"`
+	Result struct {
+		Text       string `json:"text"`
+		Utterances []struct {
+			Definite  bool   `json:"definite"`
+			EndTime   int    `json:"end_time"`
+			StartTime int    `json:"start_time"`
+			Text      string `json:"text"`
+			Words     []struct {
+				EndTime   int    `json:"end_time"`
+				StartTime int    `json:"start_time"`
+				Text      string `json:"text"`
+			} `json:"words"`
+		} `json:"utterances,omitempty"`
+	} `json:"result"`
+	Error string `json:"error,omitempty"`
+}
+
+type AsrResponse struct {
+	Code            int                 `json:"code"`
+	Event           int                 `json:"event"`
+	IsLastPackage   bool                `json:"is_last_package"`
+	PayloadSequence int32               `json:"payload_sequence"`
+	PayloadSize     int                 `json:"payload_size"`
+	PayloadMsg      *AsrResponsePayload `json:"payload_msg"`
+}
+
 // parseResponse 解析响应数据
 func (p *Provider) parseResponse(data []byte) (map[string]interface{}, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("响应数据太短")
 	}
-
-	// 解析头部
-	_ = data[0] >> 4 // protocol version
 	headerSize := data[0] & 0x0f
 	messageType := data[1] >> 4
-	_ = data[1] & 0x0f // flags
+	messageTypeSpecificFlags := data[1] & 0x0f // flags
 	serializationMethod := data[2] >> 4
 	compressionMethod := data[2] & 0x0f
+	var asr_result AsrResponse
+	// 解析头部
+	_ = data[0] >> 4 // protocol version
 
+	var payload []byte
 	// 跳过头部获取payload
-	payload := data[headerSize*4:]
+	if len(data) > 8 && data[8] == '{' {
+		payload = data[8:]
+		// p.logger.Info("[DEBUG] payload偏移修正为data[8:]，首字节=%d", payload[0])
+	} else {
+		payload = data[headerSize*4:]
+	}
 	result := make(map[string]interface{})
+
+	if messageTypeSpecificFlags&0x01 != 0 {
+		asr_result.PayloadSequence = int32(binary.BigEndian.Uint32(payload[:4]))
+	}
+	if messageTypeSpecificFlags&0x02 != 0 {
+		asr_result.IsLastPackage = true
+		result["is_last_package"] = true
+		//p.logger.Info("收到最后一个包, PayloadSequence=%d", asr_result.PayloadSequence)
+	}
+	if messageTypeSpecificFlags&0x04 != 0 {
+		asr_result.Event = int(binary.BigEndian.Uint32(payload[:4]))
+	}
 
 	var payloadMsg []byte
 	var payloadSize int32
 
 	switch messageType {
 	case serverFullResponse:
-		// Doc: Header | Sequence | Payload size | Payload
-		if len(payload) < 8 { // Need 4 bytes for sequence + 4 bytes for payload size
-			return nil, fmt.Errorf("serverFullResponse payload too short for sequence and size: got %d bytes", len(payload))
+		// 如果 payload 直接是 JSON（如以 '{' 开头），直接解析，不做 sequence/payloadSize 处理
+		if len(payload) > 0 && payload[0] == '{' {
+			// p.logger.Info("[DEBUG] 进入JSON直解析分支，payload长度=%d", len(payload))
+			payloadMsg = payload
+			payloadSize = int32(len(payload))
+		} else {
+			// p.logger.Info("[DEBUG] 进入协议头解析分支，payload长度=%d", len(payload))
+			// Doc: Header | Sequence | Payload size | Payload
+			if len(payload) < 8 {
+				return nil, fmt.Errorf("serverFullResponse payload too short for sequence and size: got %d bytes", len(payload))
+			}
+			seq := binary.BigEndian.Uint32(payload[0:4])
+			result["seq"] = seq // Store WebSocket frame sequence
+			payloadSize = int32(binary.BigEndian.Uint32(payload[4:8]))
+			if len(payload) < 8+int(payloadSize) {
+				return nil, fmt.Errorf("serverFullResponse payload too short for declared payload size: got %d bytes, expected header + %d bytes", len(payload), payloadSize)
+			}
+			payloadMsg = payload[8:]
 		}
-		seq := binary.BigEndian.Uint32(payload[0:4])
-		result["seq"] = seq // Store WebSocket frame sequence
-		payloadSize = int32(binary.BigEndian.Uint32(payload[4:8]))
-		if len(payload) < 8+int(payloadSize) {
-			return nil, fmt.Errorf("serverFullResponse payload too short for declared payload size: got %d bytes, expected header + %d bytes", len(payload), payloadSize)
-		}
-		payloadMsg = payload[8:]
 	case serverAck:
 		// Doc for serverAck is not detailed for ASR, but generally it might have a sequence
 		if len(payload) < 4 {
-			return nil, fmt.Errorf("serverAck payload too short for sequence: got %d bytes", len(payload))
+			return nil, fmt.Errorf(
+				"serverAck payload too short for sequence: got %d bytes",
+				len(payload),
+			)
 		}
 		seq := binary.BigEndian.Uint32(payload[0:4])
 		result["seq"] = seq
 		if len(payload) >= 8 { // If there's more data, assume it's payload size and then payload
 			payloadSize = int32(binary.BigEndian.Uint32(payload[4:8]))
 			if len(payload) < 8+int(payloadSize) {
-				return nil, fmt.Errorf("serverAck payload too short for declared payload size: got %d bytes, expected header + %d bytes", len(payload), payloadSize)
+				return nil, fmt.Errorf(
+					"serverAck payload too short for declared payload size: got %d bytes, expected header + %d bytes",
+					len(payload),
+					payloadSize,
+				)
 			}
 			payloadMsg = payload[8:]
 		} else {
@@ -290,7 +338,7 @@ func (p *Provider) parseResponse(data []byte) (map[string]interface{}, error) {
 		payloadSize = int32(binary.BigEndian.Uint32(payload[4:8]))
 		payloadMsg = payload[8:]
 	}
-
+	asr_result.PayloadSize = int(payloadSize)
 	if payloadMsg != nil {
 		if compressionMethod == gzipCompression {
 			reader, err := gzip.NewReader(bytes.NewReader(payloadMsg))
@@ -543,17 +591,34 @@ func (p *Provider) ReadMessage() {
 				p.connMutex.Lock()
 				p.result = text
 				p.connMutex.Unlock()
+				isLastPackage := false
 
-				if listener := p.BaseProvider.GetListener(); listener != nil {
+				if isLast, hasLast := result["is_last_package"]; hasLast && isLast.(bool) {
+					// 如果是最后一个包，结束流式识别
+					isLastPackage = true
+					p.logger.Info("检测到最后一个ASR语音包, is_last_package=%v", isLast)
+				}
+
+				listener := p.BaseProvider.GetListener()
+				if listener != nil {
 					if text == "" && p.SilenceTime() > idleTimeout {
 						p.BaseProvider.SilenceCount += 1
-						text = "你没有听清我说话"
+						text = "[SILENCE_TIMEOUT] 用户有一段时间没说话了，请礼貌提醒用户"
+						p.logger.Info("检测到静音超时, SilenceTime=%v/%v", p.SilenceTime(), idleTimeout)
+						p.ResetStartListenTime()
 					} else if text != "" {
 						p.BaseProvider.SilenceCount = 0 // 重置静音计数
 					}
-					if finished := listener.OnAsrResult(text); finished {
+					if text == "" && !isLastPackage {
+						p.logger.Debug("跳过空文本: isLastPackage=%v", isLastPackage)
+						continue
+					}
+					p.logger.Info("调用OnAsrResult: text=%s, isLastPackage=%v", text, isLastPackage)
+					if finished := listener.OnAsrResult(text, isLastPackage); finished {
 						return
 					}
+				} else {
+					p.logger.Warn("listener为nil，无法回调ASR结果")
 				}
 			} else if errorData, hasError := payloadMsg["error"]; hasError {
 				// 处理错误响应中的 error 字段
@@ -598,7 +663,12 @@ func (p *Provider) closeConnection() {
 
 // sendAudioData 直接发送音频数据，替代之前的sendCurrentBuffer
 func (p *Provider) sendAudioData(data []byte, isLast bool) error {
-	p.logger.Debug("[DEBUG] sendAudioData: 数据长度=%d, isLast=%t, sendDataCnt=%d", len(data), isLast, p.sendDataCnt)
+	p.logger.Debug(
+		"[DEBUG] sendAudioData: 数据长度=%d, isLast=%t, sendDataCnt=%d",
+		len(data),
+		isLast,
+		p.sendDataCnt,
+	)
 	// 如果没有数据且不是最后一帧，不发送
 	if len(data) == 0 && !isLast {
 		return nil
@@ -642,6 +712,15 @@ func (p *Provider) sendAudioData(data []byte, isLast bool) error {
 	return nil
 }
 
+// SendLastAudio 发送最后一帧音频数据并标记结束
+func (p *Provider) SendLastAudio(data []byte) error {
+	return p.sendAudioData(data, true)
+}
+
+func (p *Provider) CloseConnection() error {
+	return nil
+}
+
 // Reset 重置ASR状态
 func (p *Provider) Reset() error {
 	// 使用锁保护状态变更
@@ -666,7 +745,7 @@ func (p *Provider) Reset() error {
 // Initialize 实现Provider接口的Initialize方法
 func (p *Provider) Initialize() error {
 	// 确保输出目录存在
-	if err := os.MkdirAll(p.outputDir, 0755); err != nil {
+	if err := os.MkdirAll(p.outputDir, 0o755); err != nil {
 		return fmt.Errorf("初始化输出目录失败: %v", err)
 	}
 	return nil

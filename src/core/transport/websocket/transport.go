@@ -9,10 +9,11 @@ import (
 
 	"angrymiao-ai-server/src/configs"
 	"angrymiao-ai-server/src/core/auth"
+	"angrymiao-ai-server/src/core/auth/am_token"
+	"angrymiao-ai-server/src/core/botconfig"
 	"angrymiao-ai-server/src/core/transport"
 	"angrymiao-ai-server/src/core/utils"
-	"angrymiao-ai-server/src/models"
-	"angrymiao-ai-server/src/services"
+	"angrymiao-ai-server/src/httpsvr/device"
 
 	"github.com/gorilla/websocket"
 )
@@ -26,11 +27,11 @@ type WebSocketTransport struct {
 	activeConnections sync.Map
 	upgrader          *websocket.Upgrader
 	authToken         *auth.AuthToken // JWT认证工具
-	userConfigService services.UserAIConfigService
+	userConfigService botconfig.Service
 }
 
 // NewWebSocketTransport 创建WebSocket传输层
-func NewWebSocketTransport(config *configs.Config, logger *utils.Logger, userConfigService services.UserAIConfigService) *WebSocketTransport {
+func NewWebSocketTransport(config *configs.Config, logger *utils.Logger, userConfigService botconfig.Service) *WebSocketTransport {
 	return &WebSocketTransport{
 		config: config,
 		logger: logger,
@@ -50,6 +51,8 @@ func (t *WebSocketTransport) Start(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", t.handleWebSocket)
+	// App 专用入口，使用 AM Token 做认证
+	mux.HandleFunc("/ws/app", t.handleAppWebSocket)
 
 	t.server = &http.Server{
 		Addr:    addr,
@@ -137,26 +140,49 @@ func (t *WebSocketTransport) verifyJWTAuth(r *http.Request) (uint, error) {
 	return userID, nil
 }
 
+// verifyAMJWTAuth 使用 AM Token 验证并返回用户ID
+func (t *WebSocketTransport) verifyAMJWTAuth(r *http.Request) (uint, error) {
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		return 0, fmt.Errorf("缺少或无效的Authorization头")
+	}
+	token := authHeader[7:]
+	claims, err := am_token.ParseToken(token)
+	if err != nil {
+		return 0, fmt.Errorf("签名验证失败: %v", err)
+	}
+	if claims == nil {
+		return 0, fmt.Errorf("签名解析失败")
+	}
+	if claims.UserID <= 0 {
+		return 0, fmt.Errorf("签名不包含有效的用户ID")
+	}
+	return uint(claims.UserID), nil
+}
+
 // handleWebSocket 处理WebSocket连接
 func (t *WebSocketTransport) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// 从URL参数中获取header信息（用于支持WebSocket连接时传递自定义header）
 	if t.config.Transport.WebSocket.Browser {
 		query := r.URL.Query()
-		if deviceId := query.Get("device-id"); deviceId != "" {
+		if deviceId := query.Get("Device-Id"); deviceId != "" {
 			r.Header.Set("Device-Id", deviceId)
 		}
-		if clientId := query.Get("client-id"); clientId != "" {
+		if clientId := query.Get("Client-Id"); clientId != "" {
 			r.Header.Set("Client-Id", clientId)
 		}
-		if sessionId := query.Get("session-id"); sessionId != "" {
+		if sessionId := query.Get("Session-Id"); sessionId != "" {
 			r.Header.Set("Session-Id", sessionId)
 		}
-		if transportType := query.Get("transport-type"); transportType != "" {
+		if transportType := query.Get("Transport-Type"); transportType != "" {
 			r.Header.Set("Transport-Type", transportType)
 		}
-		if token := query.Get("token"); token != "" {
+		if token := query.Get("Token"); token != "" {
 			r.Header.Set("Authorization", "Bearer "+token)
 			r.Header.Set("Token", token)
+		}
+		if vad := query.Get("Enable-VAD"); vad != "" {
+			r.Header.Set("Enable-VAD", vad)
 		}
 	}
 
@@ -168,22 +194,8 @@ func (t *WebSocketTransport) handleWebSocket(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// 将用户ID添加到请求头中，供连接处理器使用
-	r.Header.Set("User-Id", fmt.Sprintf("%d", userID))
+	// 认证成功后，直接在连接处理器上绑定用户ID
 	t.logger.Info("WebSocket认证成功: device-id=%s, user-id=%d", r.Header.Get("Device-Id"), userID)
-
-	// 预加载用户配置，避免在ConnectionHandler中重复查询数据库
-	userConfigs, err := t.preloadUserConfigs(fmt.Sprintf("%d", userID))
-	if err != nil {
-		t.logger.Warn("预加载用户配置失败: %v", err)
-		// 不阻断连接，继续处理
-	} else {
-		t.logger.Info("成功预加载用户 %d 的配置，共 %d 个", userID, len(userConfigs))
-	}
-
-	// 将用户配置存储到请求上下文中
-	ctx := context.WithValue(r.Context(), "user_configs", userConfigs)
-	r = r.WithContext(ctx)
 
 	conn, err := t.upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -194,6 +206,14 @@ func (t *WebSocketTransport) handleWebSocket(w http.ResponseWriter, r *http.Requ
 	clientID := fmt.Sprintf("%p", conn)
 	t.logger.Info("收到WebSocket连接请求: %s", r.Header.Get("Device-Id"))
 	wsConn := NewWebSocketConnection(clientID, conn)
+
+	// 若请求未提供 Session-Id，则使用 clientID 作为会话ID
+	sessionID := r.Header.Get("Session-Id")
+	if sessionID == "" {
+		sessionID = clientID
+		r.Header.Set("Session-Id", sessionID)
+	}
+	deviceID := r.Header.Get("Device-Id")
 
 	if t.connHandler == nil {
 		t.logger.Error("连接处理器工厂未设置")
@@ -207,9 +227,19 @@ func (t *WebSocketTransport) handleWebSocket(w http.ResponseWriter, r *http.Requ
 		conn.Close()
 		return
 	}
+	// 绑定用户ID到具体的 ConnectionHandler
+	if adapter, ok := handler.(*transport.ConnectionContextAdapter); ok {
+		ch := adapter.GetConnectionHandler()
+		ch.SetUserID(fmt.Sprintf("%d", userID))
+	} else {
+		t.logger.Warn("连接处理器类型非预期，无法绑定用户ID")
+	}
 
 	t.activeConnections.Store(clientID, handler)
 	t.logger.Info("WebSocket客户端 %s 连接已建立，资源已分配", clientID)
+
+	// 标记会话在线
+	device.GetPresenceManager().SetSessionOnline(deviceID, sessionID)
 
 	// 启动连接处理，并在结束时清理资源
 	go func() {
@@ -217,19 +247,103 @@ func (t *WebSocketTransport) handleWebSocket(w http.ResponseWriter, r *http.Requ
 			// 连接结束时清理
 			t.activeConnections.Delete(clientID)
 			handler.Close()
+			// 标记会话离线
+			device.GetPresenceManager().SetSessionOffline(deviceID, sessionID)
 		}()
 
 		handler.Handle()
 	}()
 }
 
-// preloadUserConfigs 预加载用户配置
-func (t *WebSocketTransport) preloadUserConfigs(userID string) ([]*models.UserAIConfig, error) {
-	// 获取用户的活跃Function Call配置
-	configs, err := t.userConfigService.GetActiveConfigs(context.Background(), userID)
-	if err != nil {
-		return nil, fmt.Errorf("获取用户配置失败: %v", err)
+// handleAppWebSocket 处理 App 专用 WebSocket 连接（使用 AM Token 认证）
+func (t *WebSocketTransport) handleAppWebSocket(w http.ResponseWriter, r *http.Request) {
+	// 支持从 query 注入 header
+	if t.config.Transport.WebSocket.Browser {
+		query := r.URL.Query()
+		if deviceId := query.Get("Device-Id"); deviceId != "" {
+			r.Header.Set("Device-Id", deviceId)
+		}
+		if clientId := query.Get("Client-Id"); clientId != "" {
+			r.Header.Set("Client-Id", clientId)
+		}
+		if sessionId := query.Get("Session-Id"); sessionId != "" {
+			r.Header.Set("Session-Id", sessionId)
+		}
+		if token := query.Get("Token"); token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+			r.Header.Set("Token", token)
+		}
+		if vad := query.Get("Enable-VAD"); vad != "" {
+			r.Header.Set("Enable-VAD", vad)
+		}
 	}
 
-	return configs, nil
+	// 标记传输类型为 app
+	r.Header.Set("Transport-Type", "WebSocket-App")
+
+	// 使用 AM Token 校验用户
+	userID, err := t.verifyAMJWTAuth(r)
+	if err != nil {
+		t.logger.Warn("[APP] WebSocket认证失败: %v", err)
+		http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	// 升级 WebSocket
+	conn, err := t.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		t.logger.Error("[APP] WebSocket升级失败: %v", err)
+		return
+	}
+
+	clientID := fmt.Sprintf("%p", conn)
+	deviceID := r.Header.Get("Device-Id")
+	if deviceID == "" {
+		deviceID = fmt.Sprintf("app-%d", userID)
+		r.Header.Set("Device-Id", deviceID)
+	}
+
+	wsConn := NewWebSocketConnection(clientID, conn)
+
+	if t.connHandler == nil {
+		t.logger.Error("[APP] 连接处理器工厂未设置")
+		conn.Close()
+		return
+	}
+
+	// 创建处理器并绑定用户ID
+	handler := t.connHandler.CreateHandler(wsConn, r)
+	if handler == nil {
+		t.logger.Error("[APP] 创建连接处理器失败")
+		conn.Close()
+		return
+	}
+	if adapter, ok := handler.(*transport.ConnectionContextAdapter); ok {
+		ch := adapter.GetConnectionHandler()
+		ch.SetUserID(fmt.Sprintf("%d", userID))
+	} else {
+		t.logger.Warn("[APP] 连接处理器类型非预期，无法绑定用户ID")
+	}
+
+	// 记录活跃连接
+	t.activeConnections.Store(clientID, handler)
+	t.logger.Info("[APP] WebSocket客户端 %s 连接已建立，device-id=%s", clientID, deviceID)
+
+	// Session 处理
+	sessionID := r.Header.Get("Session-Id")
+	if sessionID == "" {
+		sessionID = clientID
+		r.Header.Set("Session-Id", sessionID)
+	}
+	device.GetPresenceManager().SetSessionOnline(deviceID, sessionID)
+
+	// 启动连接处理，并在结束时清理资源
+	go func() {
+		defer func() {
+			t.activeConnections.Delete(clientID)
+			handler.Close()
+			device.GetPresenceManager().SetSessionOffline(deviceID, sessionID)
+		}()
+		handler.Handle()
+	}()
 }

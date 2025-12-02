@@ -12,6 +12,8 @@ import (
 	opus "github.com/qrtc/opus-go"
 )
 
+const pcmFrameDurationMs = 60
+
 // OpusDecoder 封装opus解码器
 type OpusDecoder struct {
 	decoder   *opus.OpusDecoder
@@ -152,71 +154,99 @@ func MP3ToPCMData(audioFile string) ([][]byte, error) {
 		monoPcmDataBytes[i*2+1] = byte(sample >> 8) // 高字节 (MSB)
 	}
 
-	// 函数签名要求返回 [][]byte.
-	// 将整个单声道PCM数据作为外部切片中的单个段/切片返回.
-	return [][]byte{monoPcmDataBytes}, nil
+	frameBytes := mp3SampleRate * 2 * pcmFrameDurationMs / 1000
+	if frameBytes <= 0 {
+		frameBytes = len(monoPcmDataBytes)
+	}
+
+	frames := chunkPCMBytes(monoPcmDataBytes, frameBytes)
+	return frames, nil
 }
 
-func SaveAudioToWavFile(data []byte, fileName string, sampleRate int, channels int, bitsPerSample int) error {
+func SaveAudioToWavFile(
+	data []byte,
+	fileName string,
+	sampleRate int,
+	channels int,
+	bitsPerSample int,
+	append bool, // 新增参数：是否追加写入，默认为false
+) (string, error) {
 	if fileName == "" {
 		fileName = "output.wav"
 	}
 
-	isNewFile := false
-	fileInfo, err := os.Stat(fileName)
+	var file *os.File
+	var err error
+	var currentDataSize int64 = 0
 
 	// 检查文件是否存在
-	if os.IsNotExist(err) {
-		isNewFile = true
-	}
+	_, err = os.Stat(fileName)
+	fileExists := !os.IsNotExist(err)
 
-	var file *os.File
-	if isNewFile {
+	if append && fileExists {
+		// 追加模式：打开现有文件
+		file, err = os.OpenFile(fileName, os.O_RDWR, 0644)
+		if err != nil {
+			return "", fmt.Errorf("打开文件失败: %v", err)
+		}
+		defer file.Close()
+
+		// 获取当前数据大小
+		fileInfo, err := file.Stat()
+		if err != nil {
+			return "", fmt.Errorf("获取文件信息失败: %v", err)
+		}
+		currentDataSize = fileInfo.Size() - 44 // 减去WAV头大小(44字节)
+		if currentDataSize < 0 {
+			currentDataSize = 0
+		}
+
+		// 定位到文件末尾准备追加数据
+		_, err = file.Seek(0, io.SeekEnd)
+		if err != nil {
+			return "", fmt.Errorf("定位文件末尾失败: %v", err)
+		}
+	} else {
+		// 覆写模式：删除现有文件（如果存在）并创建新文件
+		if fileExists {
+			if err := os.Remove(fileName); err != nil {
+				return "", fmt.Errorf("删除现有文件失败: %v", err)
+			}
+		}
+
 		// 创建新文件
 		file, err = os.Create(fileName)
 		if err != nil {
-			return fmt.Errorf("创建文件失败: %v", err)
+			return "", fmt.Errorf("创建文件失败: %v", err)
 		}
 		defer file.Close()
 
 		// 写入WAV文件头
 		if err := writeWavHeader(file, 0, sampleRate, channels, bitsPerSample); err != nil {
-			return fmt.Errorf("写入WAV头失败: %v", err)
+			return "", fmt.Errorf("写入WAV头失败: %v", err)
 		}
 	}
 
 	// 打开现有文件进行追加
-	file, err = os.OpenFile(fileName, os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("打开文件失败: %v", err)
-	}
-	defer file.Close()
-
-	// 获取当前数据大小
-	var currentDataSize int64
-	if !isNewFile {
-		currentDataSize = fileInfo.Size() - 44 // 减去WAV头大小(44字节)
-	}
-
-	// 在文件末尾追加新数据
-	_, err = file.Seek(0, io.SeekEnd)
-	if err != nil {
-		return fmt.Errorf("定位文件末尾失败: %v", err)
-	}
-
+	file, err = os.OpenFile(fileName, os.O_WRONLY, 0o644)
+	// 写入音频数据
 	_, err = file.Write(data)
 	if err != nil {
-		return fmt.Errorf("写入数据失败: %v", err)
+		return "", fmt.Errorf("写入数据失败: %v", err)
 	}
 
 	// 更新WAV头中的数据大小
 	newDataSize := currentDataSize + int64(len(data))
-	file.Seek(0, io.SeekStart)
-	if err := writeWavHeader(file, int(newDataSize), sampleRate, channels, bitsPerSample); err != nil {
-		return fmt.Errorf("更新WAV头失败: %v", err)
+	_, err = file.Seek(0, io.SeekStart)
+	if err != nil {
+		return "", fmt.Errorf("定位文件开头失败: %v", err)
 	}
 
-	return nil
+	if err := writeWavHeader(file, int(newDataSize), sampleRate, channels, bitsPerSample); err != nil {
+		return "", fmt.Errorf("更新WAV头失败: %v", err)
+	}
+
+	return fileName, nil
 }
 
 // 写入WAV文件头
@@ -288,9 +318,9 @@ func writeWavHeader(file *os.File, dataSize int, sampleRate, channels, bitsPerSa
 }
 
 // 保留原来的函数，但使用新函数
-func SaveAudioToFile(data []byte) error {
+func SaveAudioToFile(data []byte, fileName string) (string, error) {
 	// 默认使用16kHz, 单声道, 16位
-	return SaveAudioToWavFile(data, "output.wav", 16000, 1, 16)
+	return SaveAudioToWavFile(data, fileName, 24000, 1, 16, false)
 }
 
 func ReadPCMDataFromWavFile(filePath string) ([]byte, error) {
@@ -388,9 +418,36 @@ func AudioToPCMData(audioFile string) ([][]byte, float64, error) {
 	//音频播放时长（基于重采样后的数据）
 	duration := float64(len(resampledPcmInt16)) / float64(finalSampleRate) // 单声道PCM数据的时长 (秒)
 
-	// 函数签名要求返回 [][]byte.
-	// 将整个单声道PCM数据作为外部切片中的单个段/切片返回.
-	return [][]byte{monoPcmDataBytes}, duration, nil
+	frameBytes := finalSampleRate * 2 * pcmFrameDurationMs / 1000
+	if frameBytes <= 0 {
+		frameBytes = len(monoPcmDataBytes)
+	}
+
+	frames := chunkPCMBytes(monoPcmDataBytes, frameBytes)
+	return frames, duration, nil
+}
+
+func chunkPCMBytes(data []byte, frameBytes int) [][]byte {
+	if frameBytes <= 0 {
+		return [][]byte{data}
+	}
+	chunks := make([][]byte, 0, (len(data)+frameBytes-1)/frameBytes)
+	for offset := 0; offset < len(data); offset += frameBytes {
+		end := offset + frameBytes
+		if end <= len(data) {
+			chunk := make([]byte, frameBytes)
+			copy(chunk, data[offset:end])
+			chunks = append(chunks, chunk)
+			continue
+		}
+		chunk := make([]byte, frameBytes)
+		copy(chunk, data[offset:])
+		chunks = append(chunks, chunk)
+	}
+	if len(chunks) == 0 {
+		chunks = append(chunks, make([]byte, frameBytes))
+	}
+	return chunks
 }
 
 // AudioToOpusData 将音频文件转换为Opus数据块
@@ -575,7 +632,6 @@ func MP3ToOpusData(audioFile string) ([]byte, error) {
 
 	// 获取采样率
 	sampleRate := decoder.SampleRate()
-	fmt.Println("MP3采样率:", sampleRate)
 
 	// 确保PCM数据长度是偶数
 	pcmData := pcmDataSlices[0]

@@ -15,7 +15,7 @@ import (
 	"angrymiao-ai-server/src/core/providers"
 	"angrymiao-ai-server/src/core/utils"
 
-	"github.com/sashabaranov/go-openai"
+	"github.com/angrymiao/go-openai"
 )
 
 // Config VLLLM配置结构
@@ -149,7 +149,7 @@ func (p *Provider) Cleanup() error {
 // ResponseWithImage 处理包含图片的请求 - 核心方法
 func (p *Provider) ResponseWithImage(ctx context.Context, sessionID string, messages []providers.Message, imageData image.ImageData, text string) (<-chan string, error) {
 	// 处理图片
-	base64Image, err := p.imageProcessor.ProcessImage(ctx, imageData)
+	processedImage, err := p.imageProcessor.ProcessImage(ctx, imageData)
 	if err != nil {
 		return nil, fmt.Errorf("图片处理失败: %v", err)
 	}
@@ -158,22 +158,25 @@ func (p *Provider) ResponseWithImage(ctx context.Context, sessionID string, mess
 		"type":       p.config.Type,
 		"model_name": p.config.ModelName,
 		"text":       text,
-		"image_size": len(base64Image),
+		"image_size": len(processedImage.Data),
 	})
 
 	// 根据类型调用对应的多模态API
 	switch strings.ToLower(p.config.Type) {
 	case "openai":
-		return p.responseWithOpenAIVision(ctx, messages, base64Image, text, imageData.Format)
+		return p.responseWithOpenAIVision(ctx, messages, processedImage, text)
 	case "ollama":
-		return p.responseWithOllamaVision(ctx, messages, base64Image, text, imageData.Format)
+		if processedImage.Data == "" {
+			return nil, fmt.Errorf("ollama VLLLM图片数据为空")
+		}
+		return p.responseWithOllamaVision(ctx, messages, processedImage, text)
 	default:
 		return nil, fmt.Errorf("不支持的VLLLM类型: %s", p.config.Type)
 	}
 }
 
 // responseWithOpenAIVision 使用OpenAI Vision API
-func (p *Provider) responseWithOpenAIVision(ctx context.Context, messages []providers.Message, base64Image string, text string, format string) (<-chan string, error) {
+func (p *Provider) responseWithOpenAIVision(ctx context.Context, messages []providers.Message, imageData image.ImageData, text string) (<-chan string, error) {
 	responseChan := make(chan string, 10)
 
 	go func() {
@@ -190,6 +193,15 @@ func (p *Provider) responseWithOpenAIVision(ctx context.Context, messages []prov
 			})
 		}
 
+		visionUrl := ""
+		if imageData.URL != "" {
+			visionUrl = imageData.URL
+		}
+
+		if imageData.Data != "" {
+			visionUrl = fmt.Sprintf("data:image/%s;base64,%s", imageData.Format, imageData.Data)
+		}
+
 		// 构建包含图片的多模态消息
 		visionMessage := openai.ChatCompletionMessage{
 			Role: openai.ChatMessageRoleUser,
@@ -201,13 +213,14 @@ func (p *Provider) responseWithOpenAIVision(ctx context.Context, messages []prov
 				{
 					Type: openai.ChatMessagePartTypeImageURL,
 					ImageURL: &openai.ChatMessageImageURL{
-						URL: fmt.Sprintf("data:image/%s;base64,%s", format, base64Image),
+						URL: visionUrl,
 					},
 				},
 			},
 		}
+
 		// 打印visionMessage的内容
-		p.logger.Debug("构建的OpenAI Vision消息: %v", visionMessage)
+		p.logger.Info("构建的OpenAI Vision消息: %v", visionMessage)
 		chatMessages = append(chatMessages, visionMessage)
 
 		// 调用OpenAI Vision API
@@ -257,7 +270,7 @@ func (p *Provider) responseWithOpenAIVision(ctx context.Context, messages []prov
 }
 
 // responseWithOllamaVision 使用Ollama Vision API
-func (p *Provider) responseWithOllamaVision(ctx context.Context, messages []providers.Message, base64Image string, text string, format string) (<-chan string, error) {
+func (p *Provider) responseWithOllamaVision(ctx context.Context, messages []providers.Message, imageData image.ImageData, text string) (<-chan string, error) {
 	responseChan := make(chan string, 10)
 
 	go func() {
@@ -278,7 +291,7 @@ func (p *Provider) responseWithOllamaVision(ctx context.Context, messages []prov
 		visionMessage := OllamaMessage{
 			Role:    "user",
 			Content: text,
-			Images:  []string{base64Image}, // Ollama需要纯base64，不需要data URL前缀
+			Images:  []string{imageData.Data}, // Ollama需要纯base64，不需要data URL前缀
 		}
 		ollamaMessages = append(ollamaMessages, visionMessage)
 

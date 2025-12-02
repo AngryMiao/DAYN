@@ -35,7 +35,7 @@ func NewMemoryAuthStore(expiryHr int) *MemoryAuthStore {
 
 // StoreAuth 存储客户端认证信息
 func (m *MemoryAuthStore) StoreAuth(
-	clientID, username, password string,
+	clientID, username, password, deviceID string,
 	metadata map[string]interface{},
 ) error {
 	m.mutex.Lock()
@@ -47,8 +47,6 @@ func (m *MemoryAuthStore) StoreAuth(
 
 	// 解析用户名中的IP信息(base64编码的JSON)
 	ip := ""
-	deviceID := ""
-
 	if username != "" {
 		// 尝试解码base64
 		if decoded, err := base64.StdEncoding.DecodeString(username); err == nil {
@@ -62,7 +60,7 @@ func (m *MemoryAuthStore) StoreAuth(
 	}
 
 	// 从client_id中提取device_id (格式: CGID_test@@@device_id@@@uuid)
-	if parts := strings.Split(clientID, "@@@"); len(parts) >= 2 {
+	if parts := strings.Split(clientID, "@@@"); len(parts) >= 2 && deviceID == "" {
 		deviceID = parts[1]
 	}
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sashabaranov/go-openai"
+	"github.com/angrymiao/go-openai"
 )
 
 type FunctionRegistry struct {

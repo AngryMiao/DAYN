@@ -2,6 +2,7 @@ package transport
 
 import (
 	"angrymiao-ai-server/src/core"
+	"angrymiao-ai-server/src/core/mcp"
 	"context"
 	"net/http"
 )
@@ -36,4 +37,9 @@ type ConnectionHandler interface {
 type ConnectionHandlerFactory interface {
 	// 创建连接处理器
 	CreateHandler(conn Connection, req *http.Request) ConnectionHandler
+}
+
+type MCPManagerHolder interface {
+	GetMCPManager() *mcp.Manager
+	SetMCPManager(*mcp.Manager)
 }

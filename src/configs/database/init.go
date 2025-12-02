@@ -114,8 +114,10 @@ func InitDB(config *configs.Config) (*gorm.DB, string, error) {
 		switch dbType {
 		case "postgres":
 			db, err = gorm.Open(postgres.Open(config.DB.DSN))
+			fmt.Println("postgres 数据库连接成功")
 		case "sqlite":
 			db, err = gorm.Open(sqlite.Open(config.DB.DSN))
+			fmt.Println("sqlite 数据库连接成功")
 		default:
 			return nil, "", fmt.Errorf("不支持的数据库类型: %s", dbType)
 		}
@@ -132,7 +134,7 @@ func InitDB(config *configs.Config) (*gorm.DB, string, error) {
 
 	// 插入默认配置
 	if err := InsertDefaultConfigIfNeeded(db); err != nil {
-		fmt.Println("⚠️ 插入默认配置失败: %v", err)
+		fmt.Println("插入默认配置失败: %v", err)
 	}
 
 	DB = db
@@ -176,9 +178,15 @@ func migrateTables(db *gorm.DB) error {
 		&models.User{},
 		&models.UserSetting{},
 		&models.ModuleConfig{},
-		&models.DeviceBind{},
-		&models.UserAIConfig{},
-		&models.UserSessionConfig{},
+		&models.Device{},
+		&models.DialogueMessage{},
+		&models.MediaUpload{},
+		&models.AuthClient{},
+		&models.AudioTask{},
+		// 新的Bot配置系统模型
+		&models.ModelConfig{},
+		&models.BotConfig{},
+		&models.UserFriend{},
 	)
 }
 

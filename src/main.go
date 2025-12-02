@@ -1,4 +1,4 @@
-﻿// @title 怒喵 API 文档
+// @title 怒喵 API 文档
 // @version 1.0
 // @host localhost:8080
 // @BasePath /api
@@ -25,24 +25,27 @@ import (
 	// 项目内部包 - 配置相关
 	"angrymiao-ai-server/src/configs"
 	"angrymiao-ai-server/src/configs/database"
-	cfg "angrymiao-ai-server/src/configs/server"
+	"angrymiao-ai-server/src/httpsvr/bot"
 
 	// 项目内部包 - 核心功能
 	"angrymiao-ai-server/src/core/auth"
 	"angrymiao-ai-server/src/core/auth/am_token"
 	"angrymiao-ai-server/src/core/auth/store"
+	"angrymiao-ai-server/src/core/botconfig"
+	"angrymiao-ai-server/src/core/middleware"
 	"angrymiao-ai-server/src/core/pool"
 	"angrymiao-ai-server/src/core/transport"
 	"angrymiao-ai-server/src/core/transport/grpcgateway"
+	"angrymiao-ai-server/src/core/transport/mqtt"
 	"angrymiao-ai-server/src/core/transport/websocket"
 	"angrymiao-ai-server/src/core/utils"
 
 	// 项目内部包 - 业务模块
-	"angrymiao-ai-server/src/device"
-	"angrymiao-ai-server/src/handlers"
-	"angrymiao-ai-server/src/services"
+	appApi "angrymiao-ai-server/src/httpsvr/app"
+	"angrymiao-ai-server/src/httpsvr/device"
+	"angrymiao-ai-server/src/httpsvr/ota"
+	"angrymiao-ai-server/src/httpsvr/vision"
 	"angrymiao-ai-server/src/task"
-	"angrymiao-ai-server/src/vision"
 
 	// 文档
 	_ "angrymiao-ai-server/src/docs"
@@ -51,6 +54,7 @@ import (
 	_ "angrymiao-ai-server/src/core/providers/asr/deepgram"
 	_ "angrymiao-ai-server/src/core/providers/asr/doubao"
 	_ "angrymiao-ai-server/src/core/providers/asr/gosherpa"
+	_ "angrymiao-ai-server/src/core/providers/auc/doubao"
 	_ "angrymiao-ai-server/src/core/providers/llm/coze"
 	_ "angrymiao-ai-server/src/core/providers/llm/ollama"
 	_ "angrymiao-ai-server/src/core/providers/llm/openai"
@@ -58,6 +62,7 @@ import (
 	_ "angrymiao-ai-server/src/core/providers/tts/doubao"
 	_ "angrymiao-ai-server/src/core/providers/tts/edge"
 	_ "angrymiao-ai-server/src/core/providers/tts/gosherpa"
+	_ "angrymiao-ai-server/src/core/providers/vad/webrtc"
 	_ "angrymiao-ai-server/src/core/providers/vlllm/ollama"
 	_ "angrymiao-ai-server/src/core/providers/vlllm/openai"
 )
@@ -71,7 +76,7 @@ type Application struct {
 	serverManager *ServerManager
 	ctx           context.Context
 	cancel        context.CancelFunc
-	errGroup      *errgroup.Group
+	group         *errgroup.Group
 }
 
 // ServerManager 服务管理器，负责管理所有服务的启动和关闭
@@ -168,11 +173,6 @@ func (app *Application) validateConfiguration() error {
 		return fmt.Errorf("Web端口配置无效: %d", app.config.Web.Port)
 	}
 
-	// 验证传输层配置
-	if app.config.Transport.Default == "" {
-		return fmt.Errorf("默认传输层未配置")
-	}
-
 	app.logger.Info("配置验证通过")
 	return nil
 }
@@ -225,8 +225,9 @@ func (app *Application) initializeServerManager() error {
 
 // Start 启动应用程序
 func (app *Application) Start() error {
-	// 创建错误组
-	app.errGroup, app.ctx = errgroup.WithContext(app.ctx)
+	// 建立 errgroup，并基于当前 app.ctx 派生与组绑定的 ctx；
+	// 当任一子任务返回错误或上游取消时，该 ctx 会同步取消。
+	app.group, app.ctx = errgroup.WithContext(app.ctx)
 
 	// 启动传输层服务
 	if err := app.startTransportServer(); err != nil {
@@ -257,7 +258,8 @@ func (app *Application) startTransportServer() error {
 	})
 	taskMgr.Start()
 
-	userConfigService := services.NewUserAIConfigService(app.db, app.logger)
+	// 创建Bot配置服务（从好友表获取配置）
+	userConfigService := botconfig.NewService(app.db, app.logger)
 
 	// 创建传输管理器
 	transportManager := transport.NewTransportManager(app.config, app.logger)
@@ -272,32 +274,28 @@ func (app *Application) startTransportServer() error {
 		userConfigService,
 	)
 
-	// 根据默认选择只注册一个传输层
-	switch app.config.Transport.Default {
-	case "websocket":
-		if !app.config.Transport.WebSocket.Enabled {
-			return fmt.Errorf("默认传输层 websocket 未启用")
-		}
+	// 根据配置注册多个传输层
+	if app.config.Transport.WebSocket.Enabled {
 		wsTransport := websocket.NewWebSocketTransport(app.config, app.logger, userConfigService)
 		wsTransport.SetConnectionHandler(handlerFactory)
 		transportManager.RegisterTransport("websocket", wsTransport)
 		app.logger.Info("WebSocket 传输层已注册")
-	case "grpcgateway":
-		if !app.config.Transport.GrpcGateway.Enabled {
-			return fmt.Errorf("默认传输层 grpcgateway 未启用")
-		}
+	}
+	if app.config.Transport.GrpcGateway.Enabled {
 		gatewayTransport := grpcgateway.NewGrpcGatewayTransport(app.config, app.logger, handlerFactory)
 		gatewayTransport.SetConnectionHandler(handlerFactory)
 		transportManager.RegisterTransport("grpcgateway", gatewayTransport)
 		app.logger.Info("GrpcGateway 传输层已注册")
-	default:
-		return fmt.Errorf("未知的默认传输层: %s", app.config.Transport.Default)
+	}
+	if app.config.Transport.Mqtt.Enabled {
+		mqttTransport := mqtt.NewMQTTTransport(app.config, app.logger)
+		mqttTransport.SetConnectionHandler(handlerFactory)
+		transportManager.RegisterTransport("mqtt", mqttTransport)
+		app.logger.Info("MQTT 传输层已注册")
 	}
 
-	app.logger.Info("默认传输层已启用: %s", app.config.Transport.Default)
-
 	// 启动传输层服务
-	app.errGroup.Go(func() error {
+	app.group.Go(func() error {
 		// 监听关闭信号
 		go func() {
 			<-app.ctx.Done()
@@ -335,6 +333,9 @@ func (app *Application) startHttpServer() error {
 	router := gin.Default()
 	router.SetTrustedProxies([]string{"0.0.0.0"})
 
+	// 全局应用 CORS 中间件
+	router.Use(middleware.CORS())
+
 	// 注册路由
 	if err := app.registerRoutes(router); err != nil {
 		return fmt.Errorf("注册路由失败: %w", err)
@@ -348,7 +349,7 @@ func (app *Application) startHttpServer() error {
 	app.serverManager.httpServer = httpServer
 
 	// 启动HTTP服务
-	app.errGroup.Go(func() error {
+	app.group.Go(func() error {
 		app.logger.Info("Gin 服务已启动，访问地址: http://0.0.0.0:%d", app.config.Web.Port)
 
 		// 在单独的 goroutine 中监听关闭信号
@@ -382,44 +383,42 @@ func (app *Application) startHttpServer() error {
 func (app *Application) registerRoutes(router *gin.Engine) error {
 	// API路由全部挂载到/api前缀下
 	apiGroup := router.Group("/api")
+	// 统一跨域中间件
+	apiGroup.Use(middleware.CORS())
+
+	// 启动用户好友管理服务
+	friendHandler := appApi.NewUserFriendHandler(app.db, app.logger)
+	friendHandler.RegisterRoutes(apiGroup)
+
+	// 启动Bot配置管理服务（需要 friendService 来检查 Bot 是否已添加）
+	friendService := appApi.NewUserFriendService(app.db, app.logger)
+	botHandler := bot.NewBotConfigHandler(app.db, app.logger, friendService)
+	botHandler.RegisterRoutes(apiGroup)
+
+	// 启动模型配置管理服务
+	modelHandler := bot.NewModelConfigHandler(app.db, app.logger)
+	modelHandler.RegisterRoutes(apiGroup)
+
+	// 启动OTA服务
+	otaService := ota.NewDefaultOTAService(app.config.Web.Websocket)
+	otaService.Start(app.ctx, router, apiGroup)
 
 	// 启动设备服务
 	deviceService := device.NewDefaultDeviceService(app.config, app.logger)
-	if deviceService != nil {
-		if err := deviceService.Start(app.ctx, router, apiGroup); err != nil {
-			app.logger.Error("设备服务启动失败: %v", err)
-			// 设备服务启动失败不影响整体启动
-		}
-	}
+	deviceService.Start(app.ctx, router, apiGroup)
+
+	// 启动App服务
+	appService := appApi.NewDefaultAppService(app.config, app.logger)
+	appService.Start(app.ctx, router, apiGroup)
 
 	// 启动Vision服务
 	visionService, err := vision.NewDefaultVisionService(app.config, app.logger)
 	if err != nil {
 		app.logger.Error("Vision 服务初始化失败: %v", err)
-		// Vision服务初始化失败不影响整体启动
 	}
 	if visionService != nil {
-		if err := visionService.Start(app.ctx, router, apiGroup); err != nil {
-			app.logger.Error("Vision 服务启动失败: %v", err)
-			// Vision服务启动失败不影响整体启动
-		}
+		visionService.Start(app.ctx, router, apiGroup)
 	}
-
-	// 启动配置服务
-	cfgServer, err := cfg.NewDefaultCfgService(app.config, app.logger)
-	if err != nil {
-		app.logger.Error("配置服务初始化失败: %v", err)
-		return fmt.Errorf("配置服务初始化失败: %w", err)
-	}
-	if err := cfgServer.Start(app.ctx, router, apiGroup); err != nil {
-		app.logger.Error("配置服务启动失败: %v", err)
-		return fmt.Errorf("配置服务启动失败: %w", err)
-	}
-
-	// 启动AI配置管理服务
-	aiConfigHandler := handlers.NewAIConfigHandler(app.db, app.logger)
-	aiConfigHandler.RegisterRoutes(apiGroup)
-	app.logger.Info("AI配置管理服务已注册，访问地址: /api/ai-configs")
 
 	// 注册Swagger文档路由
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
@@ -450,7 +449,7 @@ func (app *Application) Shutdown() {
 	// 等待所有服务关闭，设置超时保护
 	done := make(chan error, 1)
 	go func() {
-		done <- app.errGroup.Wait()
+		done <- app.group.Wait()
 	}()
 
 	select {

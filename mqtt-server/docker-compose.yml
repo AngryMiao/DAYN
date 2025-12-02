@@ -1,0 +1,15 @@
+services:
+  emqx:
+    image: emqx/emqx:5.8.3
+    container_name: mqtt-broker-emqx
+    ports:
+      - "1883:1883"      # MQTT
+      - "9001:8083"      # MQTT/WebSocket
+      - "18083:18083"    # Dashboard (admin/public)
+    volumes:
+      - ./emqx/emqx.conf:/opt/emqx/etc/emqx.conf:ro
+      - ./emqx/data:/opt/emqx/data
+      - ./emqx/log:/opt/emqx/log
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

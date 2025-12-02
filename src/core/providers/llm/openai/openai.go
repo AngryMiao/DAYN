@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/sashabaranov/go-openai"
+	"github.com/angrymiao/go-openai"
 )
 
 // Provider OpenAI LLM提供者
@@ -154,14 +154,20 @@ func (p *Provider) ResponseWithFunctions(ctx context.Context, sessionID string, 
 			chatMessages[i] = chatMessage
 		}
 
+		chatRequest := openai.ChatCompletionRequest{
+			Model:    p.Config().ModelName,
+			Messages: chatMessages,
+			Tools:    tools,
+			Stream:   true,
+		}
+
+		if extra, ok := p.Config().Extra["enable_search"]; ok && extra.(bool) {
+			chatRequest.EnableSearch = true
+		}
+
 		stream, err := p.client.CreateChatCompletionStream(
 			ctx,
-			openai.ChatCompletionRequest{
-				Model:    p.Config().ModelName,
-				Messages: chatMessages,
-				Tools:    tools,
-				Stream:   true,
-			},
+			chatRequest,
 		)
 		if err != nil {
 			responseChan <- types.Response{

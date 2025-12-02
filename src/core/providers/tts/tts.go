@@ -23,6 +23,14 @@ type Config struct {
 	SupportedVoices []configs.VoiceInfo `yaml:"supported_voices"` // 支持的语音列表
 }
 
+// SetUserConfig 设置用户配置（覆盖当前配置）
+func (c *Config) SetUserConfig(userConfig *Config) {
+	if userConfig == nil {
+		return
+	}
+	*c = *userConfig
+}
+
 // Provider TTS提供者接口
 type Provider interface {
 	providers.TTSProvider
@@ -109,6 +117,16 @@ func (p *BaseProvider) Cleanup() error {
 			}
 		}
 	}
+	return nil
+}
+
+// UpdateConfig 更新配置（实现 ConfigurableProvider 接口）
+func (p *BaseProvider) UpdateConfig(userConfig *Config) error {
+	if userConfig == nil {
+		return nil
+	}
+	// 设置用户配置到当前配置
+	p.config.SetUserConfig(userConfig)
 	return nil
 }
 

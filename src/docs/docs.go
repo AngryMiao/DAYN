@@ -17,7 +17,7 @@ const docTemplate = `{
     "paths": {
         "/api/ai-configs": {
             "get": {
-                "description": "获取当前用户的所有AI配置",
+                "description": "获取当前用户的所有AI配置（已废弃，请使用 /api/app/friends/bots）",
                 "consumes": [
                     "application/json"
                 ],
@@ -25,19 +25,13 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "AI配置管理"
+                    "AI配置管理（已废弃）"
                 ],
-                "summary": "获取用户AI配置列表",
+                "summary": "获取用户AI配置列表（已废弃）",
+                "deprecated": true,
                 "responses": {
                     "200": {
                         "description": "成功",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "400": {
-                        "description": "请求参数错误",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -53,7 +47,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "创建新的AI配置",
+                "description": "创建新的AI配置（已废弃，请使用 /api/v2/bots + /api/app/friends/bots）",
                 "consumes": [
                     "application/json"
                 ],
@@ -61,9 +55,10 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "AI配置管理"
+                    "AI配置管理（已废弃）"
                 ],
-                "summary": "创建AI配置",
+                "summary": "创建AI配置（已废弃）",
+                "deprecated": true,
                 "parameters": [
                     {
                         "description": "配置信息",
@@ -102,7 +97,42 @@ const docTemplate = `{
         },
         "/api/ai-configs/{id}": {
             "get": {
-                "description": "根据配置ID获取配置详情",
+                "description": "根据配置ID获取配置详情（已废弃）",
+                "tags": [
+                    "AI配置管理（已废弃）"
+                ],
+                "summary": "获取配置详情（已废弃）",
+                "deprecated": true,
+                "responses": {}
+            },
+            "put": {
+                "summary": "更新AI配置（已废弃）",
+                "deprecated": true,
+                "responses": {}
+            },
+            "delete": {
+                "summary": "删除AI配置（已废弃）",
+                "deprecated": true,
+                "responses": {}
+            }
+        },
+        "/api/ai-configs/{id}/priority": {
+            "patch": {
+                "summary": "设置配置优先级（已废弃）",
+                "deprecated": true,
+                "responses": {}
+            }
+        },
+        "/api/ai-configs/{id}/toggle": {
+            "patch": {
+                "summary": "切换配置状态（已废弃）",
+                "deprecated": true,
+                "responses": {}
+            }
+        },
+        "/api/app/friends/bots": {
+            "get": {
+                "description": "获取用户的所有Bot好友",
                 "consumes": [
                     "application/json"
                 ],
@@ -110,13 +140,467 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "AI配置管理"
+                    "用户好友管理"
                 ],
-                "summary": "获取配置详情",
+                "summary": "获取Bot好友列表",
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "添加Bot为好友",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "用户好友管理"
+                ],
+                "summary": "添加Bot好友",
+                "parameters": [
+                    {
+                        "description": "好友信息",
+                        "name": "friend",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.AddBotFriendRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "添加成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/app/friends/bots/{bot_config_id}": {
+            "delete": {
+                "description": "删除Bot好友关系",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "用户好友管理"
+                ],
+                "summary": "删除Bot好友",
                 "parameters": [
                     {
                         "type": "integer",
-                        "description": "配置ID",
+                        "description": "Bot配置ID",
+                        "name": "bot_config_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "删除成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "好友不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/app/friends/bots/{bot_config_id}/appkey": {
+            "patch": {
+                "description": "更新Bot好友的LLM API密钥",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "用户好友管理"
+                ],
+                "summary": "更新Bot好友的AppKey",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Bot配置ID",
+                        "name": "bot_config_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "AppKey信息",
+                        "name": "appkey",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.UpdateBotFriendAppKeyRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "更新成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "好友不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/app/friends/bots/{bot_config_id}/priority": {
+            "patch": {
+                "description": "更新Bot好友的优先级",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "用户好友管理"
+                ],
+                "summary": "更新Bot好友优先级",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Bot配置ID",
+                        "name": "bot_config_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "优先级信息",
+                        "name": "priority",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.UpdateBotFriendPriorityRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "更新成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "好友不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/app/friends/bots/{bot_config_id}/toggle": {
+            "patch": {
+                "description": "启用或禁用Bot好友",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "用户好友管理"
+                ],
+                "summary": "切换Bot好友状态",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Bot配置ID",
+                        "name": "bot_config_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "状态信息",
+                        "name": "status",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.ToggleBotFriendStatusRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "操作成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "好友不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v2/bots": {
+            "post": {
+                "description": "创建新的Bot配置",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Bot配置管理"
+                ],
+                "summary": "创建Bot配置",
+                "parameters": [
+                    {
+                        "description": "配置信息",
+                        "name": "config",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.CreateBotConfigRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "创建成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v2/bots/my": {
+            "get": {
+                "description": "获取当前用户创建的所有Bot配置",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Bot配置管理"
+                ],
+                "summary": "获取我创建的Bot列表",
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v2/bots/search": {
+            "get": {
+                "description": "搜索Bot配置，支持bot_hash精确搜索和bot_name模糊搜索",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Bot配置管理"
+                ],
+                "summary": "搜索Bot配置",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "搜索关键词",
+                        "name": "query",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "搜索类型：hash/name/description，默认为name",
+                        "name": "search_type",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v2/bots/{id}": {
+            "get": {
+                "description": "根据ID获取Bot配置详情",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Bot配置管理"
+                ],
+                "summary": "获取Bot配置详情",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Bot配置ID",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -154,7 +638,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "更新指定的AI配置",
+                "description": "更新指定的Bot配置",
                 "consumes": [
                     "application/json"
                 ],
@@ -162,13 +646,13 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "AI配置管理"
+                    "Bot配置管理"
                 ],
-                "summary": "更新AI配置",
+                "summary": "更新Bot配置",
                 "parameters": [
                     {
                         "type": "integer",
-                        "description": "配置ID",
+                        "description": "Bot配置ID",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -179,7 +663,274 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/models.UpdateAIConfigRequest"
+                            "$ref": "#/definitions/models.UpdateBotConfigRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "更新成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "403": {
+                        "description": "无权限",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "配置不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "删除指定的Bot配置",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Bot配置管理"
+                ],
+                "summary": "删除Bot配置",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Bot配置ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "删除成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "403": {
+                        "description": "无权限",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "配置不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v2/models": {
+            "get": {
+                "description": "获取模型配置列表",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "模型配置管理"
+                ],
+                "summary": "获取模型配置列表",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "是否只包含公共模型",
+                        "name": "include_public",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "创建新的模型配置",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "模型配置管理"
+                ],
+                "summary": "创建模型配置",
+                "parameters": [
+                    {
+                        "description": "模型配置信息",
+                        "name": "model",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "创建成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v2/models/{id}": {
+            "get": {
+                "description": "根据ID获取模型配置详情",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "模型配置管理"
+                ],
+                "summary": "获取模型配置详情",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "模型配置ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "成功",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "请求参数错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "配置不存在",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "服务器内部错误",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "更新指定的模型配置",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "模型配置管理"
+                ],
+                "summary": "更新模型配置",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "模型配置ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "更新信息",
+                        "name": "model",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
                         }
                     }
                 ],
@@ -215,7 +966,7 @@ const docTemplate = `{
                 }
             },
             "delete": {
-                "description": "删除指定的AI配置",
+                "description": "删除指定的模型配置（软删除）",
                 "consumes": [
                     "application/json"
                 ],
@@ -223,13 +974,13 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "AI配置管理"
+                    "模型配置管理"
                 ],
-                "summary": "删除AI配置",
+                "summary": "删除模型配置",
                 "parameters": [
                     {
                         "type": "integer",
-                        "description": "配置ID",
+                        "description": "模型配置ID",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -262,161 +1013,6 @@ const docTemplate = `{
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/api/ai-configs/{id}/priority": {
-            "patch": {
-                "description": "设置指定AI配置的优先级",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "AI配置管理"
-                ],
-                "summary": "设置配置优先级",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "配置ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "优先级信息",
-                        "name": "priority",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "integer"
-                            }
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "操作成功",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "400": {
-                        "description": "请求参数错误",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "404": {
-                        "description": "配置不存在",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "500": {
-                        "description": "服务器内部错误",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/api/ai-configs/{id}/toggle": {
-            "patch": {
-                "description": "启用或禁用指定的AI配置",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "AI配置管理"
-                ],
-                "summary": "切换配置状态",
-                "parameters": [
-                    {
-                        "type": "integer",
-                        "description": "配置ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "状态信息",
-                        "name": "status",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "boolean"
-                            }
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "操作成功",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "400": {
-                        "description": "请求参数错误",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "404": {
-                        "description": "配置不存在",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "500": {
-                        "description": "服务器内部错误",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    }
-                }
-            }
-        },
-        "/device/": {
-            "options": {
-                "description": "处理 Device 接口的 OPTIONS 预检请求，返回 200",
-                "consumes": [
-                    "*/*"
-                ],
-                "produces": [
-                    "text/plain"
-                ],
-                "tags": [
-                    "Device"
-                ],
-                "summary": "Device 预检请求",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "string"
                         }
                     }
                 }
@@ -598,24 +1194,6 @@ const docTemplate = `{
             }
         },
         "/ota/": {
-            "get": {
-                "description": "获取 OTA 服务状态和 WebSocket 地址，供设备查询",
-                "produces": [
-                    "text/plain"
-                ],
-                "tags": [
-                    "OTA"
-                ],
-                "summary": "获取 OTA 状态",
-                "responses": {
-                    "200": {
-                        "description": "OTA interface is running, websocket address: ws://...",
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                }
-            },
             "post": {
                 "description": "设备上传信息后，返回最新固件版本和下载地址",
                 "consumes": [
@@ -642,7 +1220,7 @@ const docTemplate = `{
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/ota.OtaRequest"
+                            "$ref": "#/definitions/ota.OTARequestBody"
                         }
                     }
                 ],
@@ -650,66 +1228,14 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/ota.OtaFirmwareResponse"
+                            "$ref": "#/definitions/ota.OTAResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/ota.ErrorResponse"
-                        }
-                    }
-                }
-            },
-            "options": {
-                "description": "处理 OTA 接口的 OPTIONS 预检请求，返回 200",
-                "consumes": [
-                    "*/*"
-                ],
-                "produces": [
-                    "text/plain"
-                ],
-                "tags": [
-                    "OTA"
-                ],
-                "summary": "OTA 预检请求",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                }
-            }
-        },
-        "/ota_bin/{filename}": {
-            "get": {
-                "description": "根据文件名下载 OTA 固件",
-                "produces": [
-                    "application/octet-stream"
-                ],
-                "tags": [
-                    "OTA"
-                ],
-                "summary": "下载 OTA 固件文件",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "固件文件名",
-                        "name": "filename",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "文件流"
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/ota.ErrorResponse"
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     }
                 }
@@ -786,6 +1312,27 @@ const docTemplate = `{
                 }
             }
         },
+        "models.AddBotFriendRequest": {
+            "type": "object",
+            "required": [
+                "app_key",
+                "bot_config_id"
+            ],
+            "properties": {
+                "alias": {
+                    "type": "string"
+                },
+                "app_key": {
+                    "type": "string"
+                },
+                "bot_config_id": {
+                    "type": "integer"
+                },
+                "priority": {
+                    "type": "integer"
+                }
+            }
+        },
         "models.CreateAIConfigRequest": {
             "type": "object",
             "required": [
@@ -834,6 +1381,58 @@ const docTemplate = `{
                 }
             }
         },
+        "models.CreateBotConfigRequest": {
+            "type": "object",
+            "required": [
+                "config_name",
+                "description",
+                "function_name",
+                "model_id"
+            ],
+            "properties": {
+                "config_name": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "function_name": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "max_tokens": {
+                    "type": "integer"
+                },
+                "mcp_server_url": {
+                    "type": "string"
+                },
+                "model_id": {
+                    "type": "integer"
+                },
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "visibility": {
+                    "description": "private/public",
+                    "type": "string"
+                }
+            }
+        },
+        "models.ToggleBotFriendStatusRequest": {
+            "type": "object",
+            "required": [
+                "is_active"
+            ],
+            "properties": {
+                "is_active": {
+                    "type": "boolean"
+                }
+            }
+        },
         "models.UpdateAIConfigRequest": {
             "type": "object",
             "properties": {
@@ -879,70 +1478,275 @@ const docTemplate = `{
                 }
             }
         },
-        "ota.ErrorResponse": {
+        "models.UpdateBotConfigRequest": {
             "type": "object",
             "properties": {
-                "message": {
+                "config_name": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "function_name": {
+                    "type": "string"
+                },
+                "max_tokens": {
+                    "type": "integer"
+                },
+                "mcp_server_url": {
+                    "type": "string"
+                },
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "temperature": {
+                    "type": "number"
+                },
+                "visibility": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.UpdateBotFriendAppKeyRequest": {
+            "type": "object",
+            "required": [
+                "app_key"
+            ],
+            "properties": {
+                "app_key": {
+                    "type": "string"
+                }
+            }
+        },
+        "models.UpdateBotFriendPriorityRequest": {
+            "type": "object",
+            "required": [
+                "priority"
+            ],
+            "properties": {
+                "priority": {
+                    "type": "integer"
+                }
+            }
+        },
+        "ota.Activation": {
+            "type": "object",
+            "properties": {
+                "challenge": {
+                    "description": "用于设备认证挑战",
+                    "type": "string"
+                },
+                "code": {
                     "type": "string",
-                    "example": "缺少 device-id"
+                    "example": "543091"
                 },
-                "success": {
-                    "type": "boolean",
-                    "example": false
+                "message": {
+                    "type": "string"
                 }
             }
         },
-        "ota.OtaFirmwareResponse": {
+        "ota.FirmwareInfo": {
             "type": "object",
             "properties": {
-                "firmware": {
-                    "type": "object",
-                    "properties": {
-                        "url": {
-                            "type": "string",
-                            "example": "/ota_bin/1.0.3.bin"
-                        },
-                        "version": {
-                            "type": "string",
-                            "example": "1.0.3"
-                        }
-                    }
+                "url": {
+                    "type": "string",
+                    "example": "/ota_bin/1.2.4.bin"
                 },
-                "server_time": {
-                    "type": "object",
-                    "properties": {
-                        "timestamp": {
-                            "type": "integer",
-                            "example": 1688443200000
-                        },
-                        "timezone_offset": {
-                            "type": "integer",
-                            "example": 480
-                        }
-                    }
-                },
-                "websocket": {
-                    "type": "object",
-                    "properties": {
-                        "url": {
-                            "type": "string",
-                            "example": "wss://example.com/ota"
-                        }
-                    }
+                "version": {
+                    "type": "string",
+                    "example": "1.2.4"
                 }
             }
         },
-        "ota.OtaRequest": {
+        "ota.MQTTInfo": {
+            "type": "object",
+            "properties": {
+                "client_id": {
+                    "type": "string",
+                    "example": "CGID_test@@@mac@@@client"
+                },
+                "endpoint": {
+                    "type": "string",
+                    "example": "mqtt://broker:1883"
+                },
+                "password": {
+                    "type": "string",
+                    "example": "randomPwd"
+                },
+                "publish_topic": {
+                    "type": "string",
+                    "example": "device-server"
+                },
+                "subscribe_topic": {
+                    "type": "string",
+                    "example": "null"
+                },
+                "username": {
+                    "type": "string",
+                    "example": "base64string"
+                }
+            }
+        },
+        "ota.OTARequestBody": {
             "type": "object",
             "properties": {
                 "application": {
                     "type": "object",
                     "properties": {
+                        "compile_time": {
+                            "type": "string"
+                        },
+                        "elf_sha256": {
+                            "type": "string"
+                        },
+                        "idf_version": {
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        },
                         "version": {
-                            "type": "string",
-                            "example": "1.0.0"
+                            "type": "string"
                         }
                     }
+                },
+                "board": {
+                    "type": "object",
+                    "properties": {
+                        "channel": {
+                            "type": "integer"
+                        },
+                        "ip": {
+                            "type": "string"
+                        },
+                        "mac": {
+                            "type": "string"
+                        },
+                        "name": {
+                            "type": "string"
+                        },
+                        "rssi": {
+                            "type": "integer"
+                        },
+                        "ssid": {
+                            "type": "string"
+                        },
+                        "type": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "chip_info": {
+                    "type": "object",
+                    "properties": {
+                        "cores": {
+                            "type": "integer"
+                        },
+                        "features": {
+                            "type": "integer"
+                        },
+                        "model": {
+                            "type": "integer"
+                        },
+                        "revision": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "chip_model_name": {
+                    "type": "string"
+                },
+                "flash_size": {
+                    "type": "number"
+                },
+                "language": {
+                    "type": "string"
+                },
+                "mac_address": {
+                    "type": "string"
+                },
+                "minimum_free_heap_size": {
+                    "type": "string"
+                },
+                "ota": {
+                    "type": "object",
+                    "properties": {
+                        "label": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "partition_table": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "address": {
+                                "type": "number"
+                            },
+                            "label": {
+                                "type": "string"
+                            },
+                            "size": {
+                                "type": "number"
+                            },
+                            "subtype": {
+                                "type": "integer"
+                            },
+                            "type": {
+                                "type": "integer"
+                            }
+                        }
+                    }
+                },
+                "uuid": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "ota.OTAResponse": {
+            "type": "object",
+            "properties": {
+                "activation": {
+                    "$ref": "#/definitions/ota.Activation"
+                },
+                "firmware": {
+                    "$ref": "#/definitions/ota.FirmwareInfo"
+                },
+                "mqtt": {
+                    "$ref": "#/definitions/ota.MQTTInfo"
+                },
+                "server_time": {
+                    "$ref": "#/definitions/ota.ServerTimeInfo"
+                },
+                "websocket": {
+                    "$ref": "#/definitions/ota.WebSocketInfo"
+                }
+            }
+        },
+        "ota.ServerTimeInfo": {
+            "type": "object",
+            "properties": {
+                "timestamp": {
+                    "type": "integer",
+                    "example": 1720065289451
+                },
+                "timezone_offset": {
+                    "type": "integer",
+                    "example": 480
+                }
+            }
+        },
+        "ota.WebSocketInfo": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "example": "wss://your-server/ws"
                 }
             }
         }

@@ -1,7 +1,6 @@
 main
 /logs
 /tmp
-/.config.yaml
 /.mcp_server_settings.json
 .DS_Store
 wake_replay

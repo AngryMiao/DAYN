@@ -10,6 +10,7 @@ import (
 
 type AuthToken struct {
 	secretKey []byte
+	topicRoot string
 }
 
 func NewAuthToken(secretKey string) *AuthToken {
@@ -19,6 +20,21 @@ func NewAuthToken(secretKey string) *AuthToken {
 	}
 	return &AuthToken{
 		secretKey: []byte(secretKey),
+		topicRoot: "am_topic", // 默认值
+	}
+}
+
+// NewAuthTokenWithConfig 创建带配置的AuthToken
+func NewAuthTokenWithConfig(secretKey string, topicRoot string) *AuthToken {
+	if secretKey == "" {
+		fmt.Println("Error! secret key cannot be empty")
+	}
+	if topicRoot == "" {
+		topicRoot = "am_topic" // 默认值
+	}
+	return &AuthToken{
+		secretKey: []byte(secretKey),
+		topicRoot: topicRoot,
 	}
 }
 
@@ -27,17 +43,46 @@ func (at *AuthToken) GenerateToken(deviceID string) (string, error) {
 	return at.GenerateTokenWithExpiry(0, deviceID, time.Hour)
 }
 
-// GenerateTokenWithExpiry 生成指定有效期的JWT token
+// GenerateTokenWithExpiry 生成指定有效期的JWT token（包含MQTT ACL规则）
 func (at *AuthToken) GenerateTokenWithExpiry(userID uint, deviceID string, expiry time.Duration) (string, error) {
 	// 设置过期时间
 	expireTime := time.Now().Add(expiry)
 
-	// 创建claims
+	// 使用deviceID作为username（MQTT需要）
+	username := deviceID
+
+	// 构建MQTT ACL规则（使用配置的topicRoot）
+	acl := []map[string]any{
+		{
+			"permission": "allow",
+			"action":     "publish",
+			"topic":      fmt.Sprintf("%s/%s/+/in", at.topicRoot, username),
+		},
+		{
+			"permission": "allow",
+			"action":     "publish",
+			"topic":      fmt.Sprintf("%s/%s/status/#", at.topicRoot, username),
+		},
+		{
+			"permission": "allow",
+			"action":     "subscribe",
+			"topic":      fmt.Sprintf("%s/%s/+/out", at.topicRoot, username),
+		},
+		{
+			"permission": "allow",
+			"action":     "subscribe",
+			"topic":      fmt.Sprintf("%s/%s/status/#", at.topicRoot, username),
+		},
+	}
+
+	// 创建claims（包含MQTT所需字段和ACL规则）
 	claims := jwt.MapClaims{
+		"username":  username, // EMQX需要username字段
 		"user_id":   userID,
 		"device_id": deviceID,
+		"acl":       acl, // MQTT ACL规则
 		"exp":       expireTime.Unix(),
-		"iat":       time.Now().Unix(), // 添加签发时间
+		"iat":       time.Now().Unix(),
 	}
 
 	// 创建token

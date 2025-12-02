@@ -19,7 +19,7 @@ type ClientInfo struct {
 // AuthStore 认证存储接口
 type AuthStore interface {
 	// StoreAuth 存储客户端认证信息
-	StoreAuth(clientID, username, password string, metadata map[string]interface{}) error
+	StoreAuth(clientID, username, password, deviceID string, metadata map[string]interface{}) error
 
 	// ValidateAuth 验证客户端认证信息
 	ValidateAuth(clientID, username, password string) (bool, *ClientInfo, error)

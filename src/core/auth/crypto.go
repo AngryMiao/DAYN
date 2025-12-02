@@ -59,7 +59,7 @@ func generateAESKey() (string, error) {
 
 // generateNonce 生成AES nonce（128位）
 func generateNonce() (string, error) {
-	nonce := make([]byte, 16) // 128位nonce（与ESP32期望的16字节一致）
+	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
 		return "", fmt.Errorf("生成AES nonce失败: %v", err)
 	}

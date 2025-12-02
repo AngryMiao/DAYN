@@ -2,8 +2,12 @@ package vision
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"os"
@@ -11,11 +15,14 @@ import (
 	"time"
 
 	"angrymiao-ai-server/src/configs"
+	"angrymiao-ai-server/src/configs/database"
 	"angrymiao-ai-server/src/core/auth"
 	"angrymiao-ai-server/src/core/image"
+	"angrymiao-ai-server/src/core/middleware"
 	"angrymiao-ai-server/src/core/providers"
 	"angrymiao-ai-server/src/core/providers/vlllm"
 	"angrymiao-ai-server/src/core/utils"
+	"angrymiao-ai-server/src/models"
 
 	"github.com/gin-gonic/gin"
 )
@@ -26,10 +33,9 @@ const (
 )
 
 type DefaultVisionService struct {
-	logger    *utils.Logger
-	config    *configs.Config
-	vlllmMap  map[string]*vlllm.Provider // 支持多个VLLLM provider
-	authToken *auth.AuthToken            // 认证工具
+	logger   *utils.Logger
+	config   *configs.Config
+	vlllmMap map[string]*vlllm.Provider // 支持多个VLLLM provider
 }
 
 // NewDefaultVisionService 构造函数
@@ -39,8 +45,6 @@ func NewDefaultVisionService(config *configs.Config, logger *utils.Logger) (*Def
 		config:   config,
 		vlllmMap: make(map[string]*vlllm.Provider),
 	}
-
-	service.authToken = auth.NewAuthToken(config.Server.Token)
 
 	// 初始化VLLLM providers
 	if err := service.initVLLMProviders(); err != nil {
@@ -98,58 +102,133 @@ func (s *DefaultVisionService) initVLLMProviders() error {
 }
 
 // Start 实现 VisionService 接口，注册所有 Vision 相关路由
-func (s *DefaultVisionService) Start(ctx context.Context, engine *gin.Engine, apiGroup *gin.RouterGroup) error {
+func (s *DefaultVisionService) Start(ctx context.Context, engine *gin.Engine, apiGroup *gin.RouterGroup) {
 	// Vision 主接口（GET用于状态检查，POST用于图片分析）
-	apiGroup.GET("/vision", s.handleGet)
-	apiGroup.POST("/vision", s.handlePost)
-	apiGroup.OPTIONS("/vision", s.handleOptions)
 
-	s.logger.Info("Vision HTTP服务路由注册完成")
-	return nil
-}
-
-// handleOptions 处理OPTIONS请求（CORS）
-func (s *DefaultVisionService) handleOptions(c *gin.Context) {
-	s.logger.Info("收到Vision CORS预检请求 options")
-	s.addCORSHeaders(c)
-	c.Status(http.StatusOK)
-}
-
-// handleGet 处理GET请求（状态检查）
-func (s *DefaultVisionService) handleGet(c *gin.Context) {
-	s.logger.Info("收到Vision状态检查请求 get")
-	s.addCORSHeaders(c)
-
-	// 检查Vision服务状态
-	var message string
-	if len(s.vlllmMap) > 0 {
-		message = fmt.Sprintf("MCP Vision 接口运行正常，共有 %d 个可用的视觉分析模型", len(s.vlllmMap))
-	} else {
-		message = "MCP Vision 接口运行不正常，没有可用的VLLLM provider"
+	visionGroup := apiGroup.Group("vision").Use(middleware.DeviceTokenAuth(
+		auth.NewAuthToken(s.config.Server.Token),
+		s.logger))
+	{
+		visionGroup.POST("", s.handlePost)
+		visionGroup.POST("/upload/sign", s.handleUploadSign)
+		visionGroup.POST("/upload/complete", s.handleUploadComplete)
 	}
 
-	c.String(http.StatusOK, message)
+}
+
+// 上传文件签名请求
+func (s *DefaultVisionService) handleUploadSign(c *gin.Context) {
+	var body BodyOSSSign
+	if err := c.ShouldBindJSON(&body); err != nil {
+		s.respondError(c, http.StatusBadRequest, "请求参数格式错误: "+err.Error())
+		return
+	}
+
+	userID := c.GetUint("userID")
+	encryptedID := utils.HashUserIDWithSalt(userID, s.config.Server.Token, 12)
+
+	filename := utils.GenerateRandomKey(32)
+	nowDate := time.Now().Format("20060102")
+
+	dir := fmt.Sprintf("%s/%s/%s", encryptedID, body.FileType, nowDate)
+	path := fmt.Sprint(dir, filename, "_", ".", body.FileSuffix)
+
+	now := time.Now().Unix()
+	expireEnd := now + s.config.OSS.Expiration
+	var tokenExpire = time.Unix(expireEnd, 0).UTC().Format("2006-01-02T15:04:05Z")
+
+	var config ConfigStruct
+	config.Expiration = tokenExpire
+
+	var condition []string
+	condition = append(condition, "eq")
+	condition = append(condition, "$key")
+	condition = append(condition, path)
+	config.Conditions = append(config.Conditions, condition)
+
+	var policyToken PolicyToken
+
+	// calculate signature
+	result, err := json.Marshal(config)
+	if err != err {
+		s.logger.Warn(fmt.Sprintf("Vision请求解析失败: %v", err))
+		s.respondError(c, http.StatusBadRequest, "请求参数格式错误: "+err.Error())
+		return
+	}
+	deByte := base64.StdEncoding.EncodeToString(result)
+	h := hmac.New(func() hash.Hash { return sha1.New() }, []byte(s.config.OSS.AccessKeySecret))
+	_, _ = io.WriteString(h, deByte)
+
+	signedStr := base64.StdEncoding.EncodeToString(h.Sum(nil))
+
+	policyToken.AccessKeyId = s.config.OSS.AccessKeyID
+	policyToken.Host = s.config.OSS.Host
+	policyToken.Expire = expireEnd
+	policyToken.Signature = signedStr
+	policyToken.Path = path
+	policyToken.Policy = deByte
+
+	utils.Custom(c, http.StatusOK, UploadSignResponse{
+		Success: true,
+		Result:  policyToken,
+		Message: "上传签名获取成功",
+	})
+}
+
+// 上传完成回调，保存媒体信息
+func (s *DefaultVisionService) handleUploadComplete(c *gin.Context) {
+	var body BodyUploadComplete
+	if err := c.ShouldBindJSON(&body); err != nil {
+		s.respondError(c, http.StatusBadRequest, "请求参数格式错误: "+err.Error())
+		return
+	}
+
+	userID := c.GetUint("userID")
+	deviceID := c.GetHeader("Device-Id")
+
+	// 生成可访问URL，如果客户端未传url，则用OSS Host + path
+	url := body.URL
+	if url == "" {
+		host := strings.TrimRight(s.config.OSS.Host, "/")
+		path := strings.TrimLeft(body.Path, "/")
+		if host != "" && path != "" {
+			url = host + "/" + path
+		}
+	}
+
+	title := time.Now().Format("2006-01-02-15-04")
+	rec := models.MediaUpload{
+		UserID:          userID,
+		DeviceID:        deviceID,
+		Title:           title,
+		FileType:        body.FileType,
+		Path:            body.Path,
+		URL:             url,
+		Size:            body.Size,
+		MimeType:        body.MimeType,
+		DurationSeconds: body.DurationSeconds,
+		Width:           body.Width,
+		Height:          body.Height,
+	}
+
+	if err := database.GetDB().Create(&rec).Error; err != nil {
+		s.respondError(c, http.StatusInternalServerError, "保存上传记录失败: "+err.Error())
+		return
+	}
+
+	utils.Custom(c, http.StatusOK, UploadCompleteResponse{
+		Success: true,
+		Result: struct {
+			ID  uint   `json:"id"`
+			URL string `json:"url"`
+		}{ID: rec.ID, URL: rec.URL},
+		Message: "上传记录保存成功",
+	})
 }
 
 // handlePost 处理POST请求（图片分析）
 func (s *DefaultVisionService) handlePost(c *gin.Context) {
-	s.addCORSHeaders(c)
-
 	deviceID := c.GetHeader("Device-Id")
-
-	// 验证认证
-	authResult, err := s.verifyAuth(c)
-	if err != nil {
-		s.respondError(c, http.StatusUnauthorized, err.Error())
-		s.logger.Warn("vision 认证失败 %v", err)
-		return
-	}
-
-	if !authResult.IsValid {
-		s.respondError(c, http.StatusUnauthorized, "无效的认证token或设备ID不匹配")
-		s.logger.Warn(fmt.Sprintf("Vision认证失败: %s", authResult.DeviceID))
-		return
-	}
 
 	// 解析multipart表单
 	req, err := s.parseMultipartRequest(c, deviceID)
@@ -165,6 +244,8 @@ func (s *DefaultVisionService) handlePost(c *gin.Context) {
 		"question":   req.Question,
 		"image_size": len(req.Image),
 		"image_path": req.ImagePath,
+		"file_type":  req.FileType,
+		"url":        req.URL,
 	})
 
 	// 处理图片分析
@@ -186,40 +267,7 @@ func (s *DefaultVisionService) handlePost(c *gin.Context) {
 	}
 
 	s.logger.Info("Vision分析结果%t: %s", response.Success, response.Result)
-	c.JSON(http.StatusOK, response)
-}
-
-// verifyAuth 验证认证token
-func (s *DefaultVisionService) verifyAuth(c *gin.Context) (*AuthVerifyResult, error) {
-	// 获取Authorization头
-	authHeader := c.GetHeader("Authorization")
-	if !strings.HasPrefix(authHeader, "Bearer ") {
-		return nil, fmt.Errorf("无效的认证token或token已过期")
-	}
-
-	token := authHeader[7:] // 移除"Bearer "前缀
-
-	// 打印认证token
-	s.logger.Debug(fmt.Sprintf("收到认证token: %s", token))
-
-	// 验证token（注意VerifyToken返回3个值）
-	isValid, deviceID, _, err := s.authToken.VerifyToken(token)
-	if err != nil || !isValid {
-		s.logger.Warn(fmt.Sprintf("认证token验证失败: %v", err))
-		return nil, fmt.Errorf("无效的认证token或token已过期")
-	}
-
-	// 检查设备ID匹配
-	requestDeviceID := c.GetHeader("Device-Id")
-	if requestDeviceID != deviceID {
-		s.logger.Warn(fmt.Sprintf("设备ID与token不匹配: 请求设备ID=%s, token设备ID=%s", requestDeviceID, deviceID))
-		return nil, fmt.Errorf("设备ID与token不匹配")
-	}
-
-	return &AuthVerifyResult{
-		IsValid:  true,
-		DeviceID: deviceID,
-	}, nil
+	utils.Custom(c, http.StatusOK, response)
 }
 
 // parseMultipartRequest 解析multipart表单请求
@@ -252,37 +300,59 @@ func (s *DefaultVisionService) parseMultipartRequest(c *gin.Context, deviceID st
 		return nil, fmt.Errorf("缺少问题字段")
 	}
 
-	// 获取图片文件
-	file, header, err := c.Request.FormFile("file")
-	if err != nil {
-		return nil, fmt.Errorf("缺少图片文件: %v", err)
-	}
-	defer file.Close()
-
-	// 检查文件大小
-	if header.Size > MAX_FILE_SIZE {
-		return nil, fmt.Errorf("图片大小超过限制，最大允许%dMB", MAX_FILE_SIZE/1024/1024)
+	fileType := c.Request.FormValue("file_type")
+	if fileType == "" {
+		return nil, fmt.Errorf("缺少文件类型字段")
 	}
 
-	// 读取图片数据
-	imageData, err := io.ReadAll(file)
-	if err != nil {
-		return nil, fmt.Errorf("读取图片数据失败: %v", err)
+	if fileType != "url" && fileType != "file" {
+		return nil, fmt.Errorf("文件类型必须为url或file")
 	}
 
-	if len(imageData) == 0 {
-		return nil, fmt.Errorf("图片数据为空")
+	url := ""
+	imageData := []byte{}
+	saveImageToFile := ""
+
+	if fileType == "url" {
+		url = c.Request.FormValue("file_url")
+		if url == "" {
+			return nil, fmt.Errorf("缺少URL字段")
+		}
 	}
 
-	// 验证图片格式
-	if !s.isValidImageFile(imageData) {
-		return nil, fmt.Errorf("不支持的文件格式，请上传有效的图片文件（支持JPEG、PNG、GIF、BMP、TIFF、WEBP格式）")
-	}
+	if fileType == "file" {
+		// 获取图片文件
+		file, header, err := c.Request.FormFile("file")
+		if err != nil {
+			return nil, fmt.Errorf("缺少图片文件: %v", err)
+		}
+		defer file.Close()
 
-	// 将图片保存在本地
-	saveImageToFile, err := s.saveImageToFile(imageData, deviceID)
-	if err != nil {
-		return nil, fmt.Errorf("保存图片文件失败(%s): %v", saveImageToFile, err)
+		// 检查文件大小
+		if header.Size > MAX_FILE_SIZE {
+			return nil, fmt.Errorf("图片大小超过限制，最大允许%dMB", MAX_FILE_SIZE/1024/1024)
+		}
+
+		// 读取图片数据
+		imageData, err = io.ReadAll(file)
+		if err != nil {
+			return nil, fmt.Errorf("读取图片数据失败: %v", err)
+		}
+
+		if len(imageData) == 0 {
+			return nil, fmt.Errorf("图片数据为空")
+		}
+
+		// 验证图片格式
+		if !s.isValidImageFile(imageData) {
+			return nil, fmt.Errorf("不支持的文件格式，请上传有效的图片文件（支持JPEG、PNG、GIF、BMP、TIFF、WEBP格式）")
+		}
+
+		// 将图片保存在本地
+		saveImageToFile, err = s.saveImageToFile(imageData, deviceID)
+		if err != nil {
+			return nil, fmt.Errorf("保存图片文件失败(%s): %v", saveImageToFile, err)
+		}
 	}
 
 	return &VisionRequest{
@@ -291,6 +361,8 @@ func (s *DefaultVisionService) parseMultipartRequest(c *gin.Context, deviceID st
 		DeviceID:  deviceID,
 		ClientID:  c.GetHeader("Client-Id"),
 		ImagePath: saveImageToFile, // 保存的图片路径
+		FileType:  fileType,
+		URL:       url,
 	}, nil
 }
 
@@ -322,15 +394,19 @@ func (s *DefaultVisionService) processVisionRequest(req *VisionRequest) (string,
 		return "", fmt.Errorf("没有可用的视觉分析模型")
 	}
 
-	// 将图片转换为base64
-	imageBase64 := base64.StdEncoding.EncodeToString(req.Image)
-
-	// 创建ImageData结构
-	imageData := image.ImageData{
-		Data:   imageBase64,
-		Format: s.detectImageFormat(req.Image),
+	imageData := image.ImageData{}
+	if req.FileType == "url" {
+		imageData.URL = req.URL
 	}
-	s.logger.Debug("处理图片数据: %s, 格式: %s", req.ClientID, imageData.Format)
+
+	if req.FileType == "file" {
+		// 将图片转换为base64
+		imageBase64 := base64.StdEncoding.EncodeToString(req.Image)
+
+		imageData.Data = imageBase64
+		imageData.Format = s.detectImageFormat(req.Image)
+	}
+
 	// 调用VLLLM provider
 	messages := []providers.Message{} // 空的历史消息
 	responseChan, err := provider.ResponseWithImage(context.Background(), "", messages, imageData, req.Question)
@@ -444,7 +520,7 @@ func (s *DefaultVisionService) respondError(c *gin.Context, statusCode int, mess
 		Success: false,
 		Message: message,
 	}
-	c.JSON(statusCode, response)
+	utils.Custom(c, statusCode, response)
 }
 
 // Cleanup 清理资源

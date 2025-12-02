@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sashabaranov/go-openai"
+	"github.com/angrymiao/go-openai"
 )
 
 // Provider Ollama LLM提供者

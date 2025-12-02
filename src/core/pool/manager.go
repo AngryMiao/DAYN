@@ -4,6 +4,7 @@ import (
 	"angrymiao-ai-server/src/configs"
 	"angrymiao-ai-server/src/core/mcp"
 	"angrymiao-ai-server/src/core/providers"
+	providersvad "angrymiao-ai-server/src/core/providers/vad"
 	"angrymiao-ai-server/src/core/providers/vlllm"
 	"angrymiao-ai-server/src/core/utils"
 	"context"
@@ -18,6 +19,7 @@ type PoolManager struct {
 	ttsPool   *ResourcePool
 	vlllmPool *ResourcePool
 	mcpPool   *ResourcePool
+	vadPool   *ResourcePool
 	logger    *utils.Logger
 }
 
@@ -28,6 +30,7 @@ type ProviderSet struct {
 	TTS   providers.TTSProvider
 	VLLLM *vlllm.Provider
 	MCP   *mcp.Manager
+	VAD   providersvad.Provider
 }
 
 // NewPoolManager 创建资源池管理器
@@ -37,9 +40,9 @@ func NewPoolManager(config *configs.Config, logger *utils.Logger) (*PoolManager,
 	}
 
 	// 执行连通性检查
-	if err := pm.performConnectivityCheck(config, logger); err != nil {
-		return nil, fmt.Errorf("资源连通性检查失败: %v", err)
-	}
+	// if err := pm.performConnectivityCheck(config, logger); err != nil {
+	// 	return nil, fmt.Errorf("资源连通性检查失败: %v", err)
+	// }
 
 	interval := config.PoolConfig.PoolCheckInterval
 	if interval <= 0 {
@@ -49,7 +52,7 @@ func NewPoolManager(config *configs.Config, logger *utils.Logger) (*PoolManager,
 		MinSize:       config.PoolConfig.PoolMinSize,
 		MaxSize:       config.PoolConfig.PoolMaxSize,
 		RefillSize:    config.PoolConfig.PoolRefillSize,
-		CheckInterval: time.Duration(interval) * time.Second,
+		CheckInterval: 30 * time.Second,
 	}
 
 	// 检查配置是否包含所需的模块
@@ -121,6 +124,27 @@ func NewPoolManager(config *configs.Config, logger *utils.Logger) (*PoolManager,
 		}
 	}
 
+	// 初始化VAD池（可选）
+	if vadType, ok := selectedModule["VAD"]; ok && vadType != "" {
+		vadFactory := NewVADFactory(vadType, config, logger)
+		if vadFactory == nil {
+			logger.Warn("创建VAD工厂失败: 找不到配置 %s", vadType)
+		} else {
+			vadPool, err := NewResourcePool("vadPool", vadFactory, poolConfig, logger)
+			if err != nil {
+				logger.Warn("初始化VAD资源池失败: %v", err)
+			} else {
+				pm.vadPool = vadPool
+			}
+		}
+		if pm.vadPool != nil {
+			_, cnt := pm.vadPool.GetStats()
+			logger.Info("VAD资源池初始化成功，类型: %s, 数量：%d", vadType, cnt)
+		} else {
+			logger.Warn("VAD资源池未初始化")
+		}
+	}
+
 	poolConfig = PoolConfig{
 		MinSize:       config.McpPoolConfig.PoolMinSize,
 		MaxSize:       config.McpPoolConfig.PoolMaxSize,
@@ -187,10 +211,32 @@ func (pm *PoolManager) GetProviderSet() (*ProviderSet, error) {
 		if err == nil {
 			// 直接转换，因为我们知道这是从 mcp 工厂创建的
 			set.MCP = mcpManager.(*mcp.Manager)
+			set.MCP.AutoReturnToPool = true
+		}
+	}
+
+	if pm.vadPool != nil {
+		vadp, err := pm.vadPool.Get()
+		if err == nil {
+			set.VAD = vadp.(providersvad.Provider)
 		}
 	}
 
 	return set, nil
+}
+
+func (pm *PoolManager) ReturnMcpManager(m *mcp.Manager) error {
+	if pm.mcpPool != nil && m != nil {
+		// 重置资源状态
+		if err := pm.mcpPool.Reset(m); err != nil {
+			pm.logger.Warn("重置MCP资源状态失败: %v", err)
+		}
+		// 归还到池中
+		if err := pm.mcpPool.Put(m); err != nil {
+			pm.logger.Error("归还MCP提供者失败: %v", err)
+		}
+	}
+	return nil
 }
 
 // Close 关闭所有资源池
@@ -275,7 +321,7 @@ func (pm *PoolManager) ReturnProviderSet(set *ProviderSet) error {
 	}
 
 	// 归还MCP提供者
-	if set.MCP != nil && pm.mcpPool != nil {
+	if set.MCP != nil && pm.mcpPool != nil && set.MCP.AutoReturnToPool {
 		if err := pm.mcpPool.Reset(set.MCP); err != nil {
 			pm.logger.Warn("重置MCP资源状态失败: %v", err)
 		}

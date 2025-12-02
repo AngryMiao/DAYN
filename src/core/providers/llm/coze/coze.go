@@ -10,8 +10,8 @@ import (
 	"io"
 	"sync"
 
+	"github.com/angrymiao/go-openai"
 	"github.com/coze-dev/coze-go"
-	"github.com/sashabaranov/go-openai"
 )
 
 type Provider struct {

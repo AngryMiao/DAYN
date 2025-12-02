@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/sashabaranov/go-openai"
+	"github.com/angrymiao/go-openai"
 )
 
 // ToolType represents the type of tool operation.
@@ -67,6 +67,8 @@ type Message struct {
 	Content    string     `json:"content"`
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+	BotID      uint       `json:"bot_id"`   // 自定义的字段和open ai接口无关
+	BotName    string     `json:"bot_name"` // 自定义的字段和open ai接口无关
 }
 
 func (m *Message) Print() {
@@ -104,10 +106,12 @@ type FunctionCallResult struct {
 
 // Response LLM响应结构
 type Response struct {
-	Content    string     `json:"content,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	StopReason string     `json:"stop_reason,omitempty"`
-	Error      string     `json:"error,omitempty"`
+	Content              string     `json:"content,omitempty"`
+	ReasonContent        string     `json:"reasoning_content,omitempty"`
+	UpdateConversationID string     `json:"update_conversation_id,omitempty"`
+	ToolCalls            []ToolCall `json:"tool_calls,omitempty"`
+	StopReason           string     `json:"stop_reason,omitempty"`
+	Error                string     `json:"error,omitempty"`
 }
 
 // Provider 基础提供者接口

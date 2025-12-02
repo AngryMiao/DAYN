@@ -22,7 +22,7 @@ func NewDatabaseAuthStore(expiryHr int) *DatabaseAuthStore {
 }
 
 func (s *DatabaseAuthStore) StoreAuth(
-	clientID, username, password string,
+	clientID, username, password, deviceID string,
 	metadata map[string]interface{},
 ) error {
 	now := time.Now()
@@ -33,6 +33,7 @@ func (s *DatabaseAuthStore) StoreAuth(
 	}
 	metaJson, _ := json.Marshal(metadata)
 	authClient := &models.AuthClient{
+		DeviceID:  deviceID,
 		ClientID:  clientID,
 		Username:  username,
 		Password:  password,

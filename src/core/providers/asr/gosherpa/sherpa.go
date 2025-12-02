@@ -39,8 +39,7 @@ func NewProvider(config *asr.Config, deleteFile bool, logger *utils.Logger) (*Pr
 			messageType, p, _ := conn.ReadMessage()
 			if messageType == websocket.TextMessage {
 				if listener := provider.GetListener(); listener != nil {
-					if finished := listener.OnAsrResult(string(p)); finished {
-
+					if finished := listener.OnAsrResult(string(p), true); finished {
 					}
 				}
 			}
@@ -64,6 +63,10 @@ func (p *Provider) AddAudio(data []byte) error {
 
 // 复位ASR状态
 func (p *Provider) Reset() error {
+	return nil
+}
+
+func (p *Provider) CloseConnection() error {
 	return nil
 }
 

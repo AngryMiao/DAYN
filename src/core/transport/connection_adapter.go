@@ -8,9 +8,9 @@ import (
 
 	"angrymiao-ai-server/src/configs"
 	"angrymiao-ai-server/src/core"
+	"angrymiao-ai-server/src/core/botconfig"
 	"angrymiao-ai-server/src/core/pool"
 	"angrymiao-ai-server/src/core/utils"
-	"angrymiao-ai-server/src/services"
 	"angrymiao-ai-server/src/task"
 )
 
@@ -36,7 +36,7 @@ func NewConnectionContextAdapter(
 	taskMgr *task.TaskManager,
 	logger *utils.Logger,
 	req *http.Request,
-	userConfigService services.UserAIConfigService,
+	userConfigService botconfig.Service,
 ) *ConnectionContextAdapter {
 	clientID := conn.GetID()
 	connCtx, connCancel := context.WithCancel(context.Background())
@@ -155,7 +155,7 @@ type DefaultConnectionHandlerFactory struct {
 	poolManager       *pool.PoolManager
 	taskMgr           *task.TaskManager
 	logger            *utils.Logger
-	userConfigService services.UserAIConfigService
+	userConfigService botconfig.Service
 }
 
 // NewDefaultConnectionHandlerFactory 创建默认连接处理器工厂
@@ -164,7 +164,7 @@ func NewDefaultConnectionHandlerFactory(
 	poolManager *pool.PoolManager,
 	taskMgr *task.TaskManager,
 	logger *utils.Logger,
-	userConfigService services.UserAIConfigService,
+	userConfigService botconfig.Service,
 ) *DefaultConnectionHandlerFactory {
 	return &DefaultConnectionHandlerFactory{
 		config:            config,
@@ -185,6 +185,19 @@ func (f *DefaultConnectionHandlerFactory) CreateHandler(
 	if err != nil {
 		f.logger.Error(fmt.Sprintf("获取提供者集合失败: %v", err))
 		return nil
+	}
+
+	//检查conn是否有属性mcpManager
+	if holder, ok := conn.(MCPManagerHolder); ok {
+		if mgr := holder.GetMCPManager(); mgr != nil {
+			f.poolManager.ReturnMcpManager(providerSet.MCP)
+			providerSet.MCP = mgr
+			f.logger.Info("使用已有的MCPManager创建handler")
+		} else {
+			f.logger.Info("连接没有已有的MCPManager")
+		}
+	} else {
+		f.logger.Info("连接没有MCPManagerHolder接口")
 	}
 
 	// 创建连接上下文适配器

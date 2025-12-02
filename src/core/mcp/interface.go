@@ -3,7 +3,7 @@ package mcp
 import (
 	"context"
 
-	"github.com/sashabaranov/go-openai"
+	"github.com/angrymiao/go-openai"
 )
 
 type ToolInputSchema struct {

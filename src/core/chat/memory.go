@@ -10,4 +10,7 @@ type MemoryInterface interface {
 
 	// ClearMemory 清空记忆
 	ClearMemory() error
+
+	// QueryMessagesLimit 直接从存储获取最近 limit 条消息（limit<=0 表示全部）
+	QueryMessagesLimit(limit int) ([]Message, error)
 }

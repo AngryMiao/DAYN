@@ -63,7 +63,7 @@ func (am *AuthManager) RegisterClient(
 	}
 
 	// 存储认证信息
-	err := am.store.StoreAuth(clientID, username, password, metadata)
+	err := am.store.StoreAuth(clientID, username, password, "", metadata)
 	if err != nil {
 		am.logger.Error("注册客户端认证信息失败", map[string]interface{}{
 			"client_id": clientID,

@@ -15,6 +15,14 @@ type Config struct {
 	Data map[string]interface{}
 }
 
+// SetUserConfig 设置用户配置（覆盖当前配置）
+func (c *Config) SetUserConfig(userConfig *Config) {
+	if userConfig == nil {
+		return
+	}
+	*c = *userConfig
+}
+
 // Provider ASR提供者接口
 type Provider interface {
 	providers.Provider
@@ -36,6 +44,8 @@ type BaseProvider struct {
 	BEnableSilenceDetection bool      // 是否启用静音检测
 	StartListenTime         time.Time // 最后一次ASR处理时间
 	SilenceCount            int       // 连续静音计数
+
+	UserPreferences map[string]interface{}
 
 	listener providers.AsrEventListener
 }
@@ -74,6 +84,11 @@ func (p *BaseProvider) SetListener(listener providers.AsrEventListener) {
 // GetListener 获取事件监听器
 func (p *BaseProvider) GetListener() providers.AsrEventListener {
 	return p.listener
+}
+
+func (p *BaseProvider) SetUserPreferences(preferences map[string]interface{}) error {
+	p.UserPreferences = preferences
+	return nil
 }
 
 // Config 获取配置
@@ -116,6 +131,16 @@ func (p *BaseProvider) Initialize() error {
 
 // Cleanup 清理资源
 func (p *BaseProvider) Cleanup() error {
+	return nil
+}
+
+// UpdateConfig 更新配置（实现 ConfigurableProvider 接口）
+func (p *BaseProvider) UpdateConfig(userConfig *Config) error {
+	if userConfig == nil {
+		return nil
+	}
+	// 设置用户配置到当前配置
+	p.config.SetUserConfig(userConfig)
 	return nil
 }
 

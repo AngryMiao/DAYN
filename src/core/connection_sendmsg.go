@@ -31,6 +31,35 @@ func (h *ConnectionHandler) sendHelloMessage() error {
 		"channels":       h.serverAudioChannels,
 		"frame_duration": h.serverAudioFrameDuration,
 	}
+
+	// 检查连接是否启用了UDP（通过UDPInfoProvider接口）
+	if udpProvider, ok := h.conn.(UDPInfoProvider); ok {
+		if enabled, server, port, key, nonce := udpProvider.GetUDPInfo(); enabled {
+			// UDP已启用，返回UDP配置
+			hello["transport"] = "udp"
+			hello["udp"] = map[string]interface{}{
+				"server":     server,
+				"port":       port,
+				"encryption": "aes-ctr",
+				"key":        key,
+				"nonce":      nonce,
+			}
+			h.LogInfo(fmt.Sprintf("返回UDP配置: server=%s, port=%s", server, port))
+		} else {
+			// UDP未启用，使用默认传输方式
+			hello["transport"] = h.transportType
+			if hello["transport"] == "" {
+				hello["transport"] = "mqtt"
+			}
+		}
+	} else {
+		// 连接不支持UDP接口，使用默认传输方式
+		hello["transport"] = h.transportType
+		if hello["transport"] == "" {
+			hello["transport"] = "mqtt"
+		}
+	}
+
 	data, err := json.Marshal(hello)
 	if err != nil {
 		return fmt.Errorf("序列化欢迎消息失败: %v", err)
@@ -100,11 +129,15 @@ func (h *ConnectionHandler) sendAudioMessage(filepath string, text string, textI
 		h.LogInfo(fmt.Sprintf("TTS音频发送任务结束(%t): %s, 索引: %d/%d", bFinishSuccess, text, textIndex, h.tts_last_text_index))
 		h.providers.asr.ResetStartListenTime()
 		if textIndex == h.tts_last_text_index {
-			h.sendTTSMessage("stop", "", textIndex)
-			if h.closeAfterChat {
-				h.Close()
+			if round != h.talkRound {
+				h.LogInfo("sendTTSMessage stop: 跳过结束状态发送，轮次已变化")
 			} else {
-				h.clearSpeakStatus()
+				h.sendTTSMessage("stop", "", textIndex)
+				if h.closeAfterChat {
+					h.Close()
+				} else {
+					h.clearSpeakStatus()
+				}
 			}
 		}
 	}()
@@ -158,9 +191,10 @@ func (h *ConnectionHandler) sendAudioMessage(filepath string, text string, textI
 	if textIndex == 1 {
 		now := time.Now()
 		spentTime := now.Sub(h.roundStartTime)
+		fmt.Println("回复首句耗时:", spentTime, text, round)
 		h.logger.Debug("回复首句耗时 %s 第一句话【%s】, round: %d", spentTime, text, round)
 	}
-	// fmt.Println("TTS发送", h.serverAudioFormat, text, "(索引:", textIndex, h.tts_last_text_index, "时长:", duration, "帧数:", len(audioData), ")")
+	fmt.Println("TTS发送", h.serverAudioFormat, text, "(索引:", textIndex, h.tts_last_text_index, "时长:", duration, "帧数:", len(audioData), ")")
 	h.logger.Debug("TTS发送(%s): \"%s\" (索引:%d/%d，时长:%f，帧数:%d)", h.serverAudioFormat, text, textIndex, h.tts_last_text_index, duration, len(audioData))
 
 	// 分时发送音频数据

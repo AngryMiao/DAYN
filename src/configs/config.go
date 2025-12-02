@@ -11,6 +11,13 @@ type TokenConfig struct {
 	Token string `yaml:"token" json:"token"`
 }
 
+// VADConfig VAD配置结构
+type VADConfig struct {
+	Type           string `yaml:"type"            json:"type"`
+	Aggressiveness int    `yaml:"aggressiveness"  json:"aggressiveness"` // 0-3，越高越敏感
+	FrameDuration  int    `yaml:"frame_duration"  json:"frame_duration"` // 帧持续时间(ms)，支持10/20/30
+}
+
 // CasbinConfig Casbin权限控制配置
 type CasbinConfig struct {
 	JWT JWTConfig `yaml:"jwt" json:"jwt"`
@@ -79,13 +86,39 @@ type Config struct {
 			IP      string `yaml:"ip" json:"ip"`
 			Port    int    `yaml:"port" json:"port"`
 		} `yaml:"grpcgateway" json:"grpcgateway"`
+		// MQTT传输层
+		Mqtt struct {
+			Enabled        bool   `yaml:"enabled" json:"enabled"`
+			Broker         string `yaml:"broker" json:"broker"`
+			Username       string `yaml:"username" json:"username"`
+			Password       string `yaml:"password" json:"password"`
+			TopicRoot      string `yaml:"topic_root" json:"topic_root"`
+			Qos            int    `yaml:"qos" json:"qos"`
+			ClientIDPrefix string `yaml:"client_id_prefix" json:"client_id_prefix"`
+			InSuffix       string `yaml:"in_suffix" json:"in_suffix"`
+			OutSuffix      string `yaml:"out_suffix" json:"out_suffix"`
+			TLS            struct {
+				Enabled    bool   `yaml:"enabled" json:"enabled"`
+				CAFile     string `yaml:"ca_file" json:"ca_file"`
+				CertFile   string `yaml:"cert_file" json:"cert_file"`
+				KeyFile    string `yaml:"key_file" json:"key_file"`
+				SkipVerify bool   `yaml:"skip_verify" json:"skip_verify"`
+			} `yaml:"tls" json:"tls"`
+			// UDP配置（可选，用于音频数据传输）
+			UDP struct {
+				Enabled      bool   `yaml:"enabled" json:"enabled"`
+				ListenHost   string `yaml:"listen_host" json:"listen_host"`
+				ListenPort   int    `yaml:"listen_port" json:"listen_port"`
+				ExternalHost string `yaml:"external_host" json:"external_host"`
+				ExternalPort int    `yaml:"external_port" json:"external_port"`
+			} `yaml:"udp" json:"udp"`
+		} `yaml:"mqtt" json:"mqtt"`
 	} `yaml:"transport" json:"transport"`
 
 	Log struct {
-		LogFormat string `yaml:"log_format" json:"log_format"`
-		LogLevel  string `yaml:"log_level" json:"log_level"`
-		LogDir    string `yaml:"log_dir" json:"log_dir"`
-		LogFile   string `yaml:"log_file" json:"log_file"`
+		LogLevel string `yaml:"log_level" json:"log_level"`
+		LogDir   string `yaml:"log_dir" json:"log_dir"`
+		LogFile  string `yaml:"log_file" json:"log_file"`
 	} `yaml:"log" json:"log"`
 
 	Web struct {
@@ -97,7 +130,8 @@ type Config struct {
 	} `yaml:"web" json:"web"`
 
 	DefaultPrompt    string   `yaml:"prompt"             json:"prompt"`
-	Roles            []string `yaml:"roles"              json:"roles"` // 角色列表
+	Roles            []string `yaml:"roles"              json:"roles"`         // 角色列表
+	DialogStorage    string   `yaml:"dialogStorage"      json:"dialogStorage"` // 对话存储类型，可选：postgres/redis
 	DeleteAudio      bool     `yaml:"delete_audio"       json:"delete_audio"`
 	QuickReply       bool     `yaml:"quick_reply"        json:"quick_reply"`
 	QuickReplyWords  []string `yaml:"quick_reply_words"  json:"quick_reply_words"`
@@ -113,11 +147,24 @@ type Config struct {
 	TTS   map[string]TTSConfig  `yaml:"TTS"   json:"TTS"`
 	LLM   map[string]LLMConfig  `yaml:"LLM"   json:"LLM"`
 	VLLLM map[string]VLLMConfig `yaml:"VLLLM" json:"VLLLM"`
+	VAD   map[string]VADConfig  `yaml:"VAD"   json:"VAD"`
+	AUC   map[string]ASRConfig  `yaml:"AUC"   json:"AUC"`
 
-	CMDExit []string `yaml:"CMD_exit" json:"CMD_exit"`
+	CMDExit []string  `yaml:"CMD_exit" json:"CMD_exit"`
+	OSS     OSSConfig `yaml:"oss" json:"oss"`
 
 	// 连通性检查配置
 	ConnectivityCheck ConnectivityCheckConfig `yaml:"connectivity_check" json:"connectivity_check"`
+}
+
+// OSSConfig 对象存储配置
+type OSSConfig struct {
+	Host            string `yaml:"host" json:"host"`
+	Endpoint        string `yaml:"endpoint" json:"endpoint"`
+	Bucket          string `yaml:"bucket" json:"bucket"`
+	AccessKeyID     string `yaml:"access_key_id" json:"access_key_id"`
+	AccessKeySecret string `yaml:"access_key_secret" json:"access_key_secret"`
+	Expiration      int64  `yaml:"expiration" json:"expiration"` // 预签名URL有效期(秒)
 }
 
 type PoolConfig struct {
@@ -132,6 +179,9 @@ type McpPoolConfig struct {
 	PoolRefillSize    int `yaml:"pool_refill_size"`
 	PoolCheckInterval int `yaml:"pool_check_interval"`
 }
+
+// AUCConfig AUC配置结构
+type AUCConfig map[string]interface{}
 
 // ASRConfig ASR配置结构
 type ASRConfig map[string]interface{}
@@ -219,9 +269,30 @@ func (cfg *Config) FromString(data string) error {
 }
 
 func (cfg *Config) setDefaults() {
+	cfg.Transport.Default = "websocket"
 	cfg.Transport.WebSocket.Enabled = true
 	cfg.Transport.WebSocket.IP = "0.0.0.0"
 	cfg.Transport.WebSocket.Port = 8000
+
+	cfg.Transport.Mqtt.Enabled = false
+	cfg.Transport.Mqtt.Broker = "tcp://localhost:1883"
+	cfg.Transport.Mqtt.Username = ""
+	cfg.Transport.Mqtt.Password = ""
+	cfg.Transport.Mqtt.TopicRoot = "am_topic"
+	cfg.Transport.Mqtt.Qos = 0
+	cfg.Transport.Mqtt.ClientIDPrefix = "ws-asr-server"
+	cfg.Transport.Mqtt.InSuffix = "in"
+	cfg.Transport.Mqtt.OutSuffix = "out"
+	cfg.Transport.Mqtt.TLS.Enabled = false
+	cfg.Transport.Mqtt.TLS.CAFile = ""
+	cfg.Transport.Mqtt.TLS.CertFile = ""
+	cfg.Transport.Mqtt.TLS.KeyFile = ""
+	cfg.Transport.Mqtt.TLS.SkipVerify = true
+	cfg.Transport.Mqtt.UDP.Enabled = false
+	cfg.Transport.Mqtt.UDP.ListenHost = "0.0.0.0"
+	cfg.Transport.Mqtt.UDP.ListenPort = 8990
+	cfg.Transport.Mqtt.UDP.ExternalHost = "127.0.0.1"
+	cfg.Transport.Mqtt.UDP.ExternalPort = 8990
 
 	cfg.Web.Port = 8080
 
@@ -229,13 +300,11 @@ func (cfg *Config) setDefaults() {
 
 	cfg.Log.LogDir = "logs"
 	cfg.Log.LogLevel = "INFO"
-	cfg.Log.LogFormat = "{time:YYYY-MM-DD HH:mm:ss} - {level} - {message}"
 	cfg.Log.LogFile = "server.log"
 
 	cfg.PoolConfig.PoolMinSize = 0
 	cfg.PoolConfig.PoolMaxSize = 0
 	cfg.PoolConfig.PoolCheckInterval = 30
-
 }
 
 // 从config.yaml加载

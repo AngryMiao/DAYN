@@ -7,6 +7,7 @@ import (
 	"angrymiao-ai-server/src/core/providers/asr"
 	"angrymiao-ai-server/src/core/providers/llm"
 	"angrymiao-ai-server/src/core/providers/tts"
+	"angrymiao-ai-server/src/core/providers/vad"
 	"angrymiao-ai-server/src/core/providers/vlllm"
 	"angrymiao-ai-server/src/core/utils"
 	"fmt"
@@ -33,10 +34,12 @@ func (f *ProviderFactory) Create() (interface{}, error) {
 }
 
 func (f *ProviderFactory) Destroy(resource interface{}) error {
+	f.logger.Info("[Destroy] %s 资源池关闭，销毁资源", f.Name)
+
 	if provider, ok := resource.(providers.Provider); ok {
 		return provider.Cleanup()
 	}
-	// 对于VLLLM，我们尝试调用Cleanup方法（如果存在）
+
 	if resource != nil {
 		// 使用反射或类型断言来调用Cleanup方法
 		if cleaner, ok := resource.(interface{ Cleanup() error }); ok {
@@ -65,6 +68,9 @@ func (f *ProviderFactory) createProvider() (interface{}, error) {
 	case "vlllm":
 		cfg := f.config.(*configs.VLLMConfig)
 		return vlllm.Create(cfg.Type, cfg, f.logger)
+	case "vad":
+		cfg := f.config.(*vad.Config)
+		return vad.Create(cfg.Type, cfg, f.logger)
 	case "mcp":
 		cfg := f.config.(*configs.Config)
 		logger := f.logger
@@ -163,4 +169,21 @@ func NewMCPFactory(config *configs.Config, logger *utils.Logger) ResourceFactory
 		logger:       logger,
 		params:       map[string]interface{}{},
 	}
+}
+
+func NewVADFactory(vadType string, config *configs.Config, logger *utils.Logger) ResourceFactory {
+	if vadCfg, ok := config.VAD[vadType]; ok {
+		return &ProviderFactory{
+			providerType: "vad",
+			config: &vad.Config{
+				Name:           vadType,
+				Type:           vadType,
+				Aggressiveness: vadCfg.Aggressiveness,
+				FrameDuration:  vadCfg.FrameDuration,
+				Params:         nil,
+			},
+			logger: logger,
+		}
+	}
+	return nil
 }
