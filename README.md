@@ -1,6 +1,6 @@
 # Dialogue is All You Need (AM glasses Backend)
 
-English | [中文](#中文)
+English | [中文](README_zh.md)
 
 > A voice-first, multimodal backend that uses conversation to accomplish most tasks—without traditional GUIs or apps.
 
@@ -8,17 +8,24 @@ English | [中文](#中文)
 
 ## Contents
 - [Overview](#overview)
-- [What “Dialogue is All You Need” Means](#what-dialogue-is-all-you-need-means)
+- [What "Dialogue is All You Need" Means](#what-dialogue-is-all-you-need-means)
 - [Features](#features)
+- [Project Structure](#project-structure)
 - [Quick Start](#quick-start)
-  - [Configure .config.yaml](#configure-configyaml)
-  - [MCP Configuration](#mcp-configuration)
-  - [Build from Source](#build-from-source)
-  - [Windows Opus Toolchain](#windows-opus-toolchain)
-  - [Run](#run)
-- [External Auth & Device Binding](#external-auth--device-binding)
-- [Swagger](#swagger)
-- [中文](#中文)
+  - [Prerequisites](#1-prerequisites)
+  - [Configuration](#2-configuration)
+  - [Windows Setup (Opus)](#3-windows-setup-opus-compilation)
+  - [Run the Service](#4-run-the-service)
+  - [Start gRPC IM Service](#5-start-grpc-im-service-optional)
+  - [Start MQTT Server](#6-start-mqtt-server-optional)
+- [MCP Configuration](#mcp-configuration)
+- [Authentication & Device Binding](#authentication--device-binding)
+- [API Documentation](#api-documentation)
+- [Use Cases](#use-cases)
+- [Tech Stack](#tech-stack)
+- [Development Guide](#development-guide)
+- [FAQ](#faq)
+- [License](#license)
 
 ---
 
@@ -27,321 +34,486 @@ Dialogue is All You Need (AM glass backend) is an end-to-end, cross-platform ser
 
 ---
 
-## What “Dialogue is All You Need” Means
+## What "Dialogue is All You Need" Means
 - Conversation can address 80%+ of needs that were previously solved by GUIs and standalone apps. Instead of navigating screens, users simply say what they want.
 - Working with AI should feel like collaborating with a teammate—state intent, clarify context, negotiate steps, and iterate quickly, all via dialogue.
 - For the minority of cases that truly require a UI (e.g., rich data display, structured input), inject lightweight H5 cards directly into the conversation. This preserves the dialogue-first flow while providing:
   - Higher efficiency (no app switching, minimal context loss)
   - Better cross-platform behavior (HTML5 cards render consistently)
-- It’s an end-to-end cross-platform solution. The initiating endpoint can be extremely lightweight—not only PC or mobile browsers, but also any embedded personal device running Linux or even RTOS can access the service.
+- It's an end-to-end cross-platform solution. The initiating endpoint can be extremely lightweight—not only PC or mobile browsers, but also any embedded personal device running Linux or even RTOS can access the service.
 
 ---
 
 ## Features
-- [x] Transports: WebSocket, gRPC
-- [x] Voice dialog with PCM / Opus
-- [x] Models:
-  - ASR: Doubao streaming
-  - TTS: EdgeTTS / Doubao
-  - LLM: OpenAI API, Ollama
-- [x] Voice-controlled camera invocation for on-device image recognition
-- [x] MCP protocol (client/local/server) with integrations like AMap (Gaode) and weather
-- [x] Voice-controlled role voice switching
-- [x] Voice-controlled preset role switching
-- [x] Single-host deployment
-- [x] Local databases: sqlite, postgre
+
+### 🎯 Multi-Transport Support
+* [x] **WebSocket** - Real-time bidirectional communication for browsers and native clients
+* [x] **gRPC Gateway** - High-performance RPC communication
+* [x] **MQTT** - IoT device messaging with UDP audio transport
+* [x] **Multi-Protocol** - Enable multiple transport protocols simultaneously
+
+### 🎤 Voice Processing
+* [x] **ASR (Speech Recognition)** - Doubao streaming, Deepgram, GoSherpa
+* [x] **TTS (Text-to-Speech)** - Doubao, EdgeTTS, Deepgram, GoSherpa
+* [x] **VAD (Voice Activity Detection)** - WebRTC VAD for smart speech start/end detection
+* [x] **Audio Formats** - PCM and Opus codec support
+* [x] **AUC (Audio Transcription)** - Doubao audio file recognition
+
+### 🤖 LLM Integration
+* [x] **OpenAI-Compatible API** - Qwen, ChatGLM, DeepSeek, etc.
+* [x] **Local Models** - Ollama local deployment
+* [x] **Coze Bot** - Coze platform bot integration
+* [x] **Function Calling** - Tool invocation capabilities
+* [x] **Streaming Response** - Real-time streaming output
+
+### 👁️ Vision Capabilities
+* [x] **VLLLM (Vision Language Models)** - GLM-4V, Qwen2.5VL support
+* [x] **Image Recognition** - Voice-controlled camera invocation
+* [x] **Image Security** - File size, format, and pixel validation
+
+### 🔧 MCP Protocol Support
+* [x] **MCP Client** - Call external MCP servers (AMap, weather, etc.)
+* [x] **MCP Server** - Provide MCP services to external clients
+* [x] **Local MCP Functions** - Time query, exit intent, role switching, music playback, voice changing
+* [x] **Resource Pool** - MCP connection pool for performance optimization
+
+### 🎭 Roles & Configuration
+* [x] **Multi-Role Support** - Preset role configurations (AngryMiao, English Teacher, etc.)
+* [x] **Voice Switching** - Dynamic TTS voice changing
+* [x] **Bot Configuration** - User-defined bot configs (private/public)
+* [x] **Friend System** - User friend management and bot addition
+
+### 🔐 Authentication & Security
+* [x] **JWT Authentication** - JWT-based user authentication
+* [x] **Device Binding** - Device ID binding and authorization
+* [x] **Token Management** - Memory/file/Redis storage options
+* [x] **Access Control** - User-based permission control
+
+### 💾 Data Storage
+* [x] **SQLite** - Lightweight local database
+* [x] **PostgreSQL** - Production database
+* [x] **Redis** - Cache and session storage
+* [x] **Dialogue History** - SQLite/PostgreSQL/Redis storage support
+
+### 🚀 Additional Features
+* [x] **OTA Updates** - Device firmware over-the-air updates
+* [x] **Task Management** - Async task queue and scheduling
+* [x] **Connection Pools** - ASR/LLM/TTS/MCP resource pool management
+* [x] **Graceful Shutdown** - Signal handling and resource cleanup
+* [x] **Swagger Docs** - Complete API documentation
+* [x] **Logging System** - Structured logging output
+
+---
+
+## Project Structure
+
+```
+angrymiao-ai-server/
+├── src/
+│   ├── main.go                 # Program entry point
+│   ├── configs/                # Configuration management
+│   │   ├── config.go           # Config loading
+│   │   ├── database/           # Database initialization
+│   │   └── casbin/             # JWT public key config
+│   ├── core/                   # Core functionality
+│   │   ├── connection.go       # Connection handler
+│   │   ├── auth/               # Authentication management
+│   │   ├── botconfig/          # Bot configuration service
+│   │   ├── chat/               # Dialogue management
+│   │   ├── function/           # Function registry
+│   │   ├── image/              # Image processing
+│   │   ├── mcp/                # MCP protocol implementation
+│   │   ├── pool/               # Resource pool management
+│   │   ├── providers/          # AI providers
+│   │   │   ├── asr/            # Speech recognition
+│   │   │   ├── tts/            # Text-to-speech
+│   │   │   ├── llm/            # Large language models
+│   │   │   ├── vlllm/          # Vision language models
+│   │   │   ├── vad/            # Voice activity detection
+│   │   │   └── auc/            # Audio transcription
+│   │   ├── transport/          # Transport layer
+│   │   │   ├── websocket/      # WebSocket transport
+│   │   │   ├── grpcgateway/    # gRPC transport
+│   │   │   └── mqtt/           # MQTT transport
+│   │   └── utils/              # Utility functions
+│   ├── httpsvr/                # HTTP services
+│   │   ├── app/                # User friend management
+│   │   ├── bot/                # Bot configuration management
+│   │   ├── device/             # Device management
+│   │   ├── ota/                # OTA updates
+│   │   └── vision/             # Vision services
+│   ├── models/                 # Data models
+│   ├── task/                   # Task management
+│   └── docs/                   # Swagger documentation
+├── im-server/                  # gRPC IM service (optional)
+├── mqtt-server/                # MQTT server configuration
+├── .config.yaml                # Main configuration file
+└── go.mod                      # Go module dependencies
+```
 
 ---
 
 ## Quick Start
 
-### Configure `.config.yaml`
-- Template at project root: `config.yaml`
-- Copy to local config: `cp config.yaml .config.yaml`
-- Adjust model providers, WebSocket, and server endpoints as needed
+### 1. Prerequisites
 
-WebSocket address:
-```yaml
-web:
-  websocket: ws://your-server-ip:8000
+* **Go 1.24.2+**
+* **Windows users need CGO and Opus library** (see installation below)
+* **Optional: PostgreSQL / Redis** (defaults to SQLite)
+
+### 2. Configuration
+
+Copy the config template and modify:
+
+```bash
+cp config.yaml .config.yaml
 ```
 
-Transport:
+#### Key Configuration Items
+
+**Transport Layer**: WebSocket (default port 8000), gRPC Gateway, MQTT  
+**Web Service**: HTTP API port 8080, auto-generated Swagger docs  
+**AI Models**: Select ASR/TTS/LLM/VLLLM providers in `selected_module`  
+**Database**: Default SQLite, switchable to PostgreSQL  
+**Authentication**: JWT auth with memory/file/redis token storage
+
+See comments in `.config.yaml` for detailed configuration.
+
+**Quick Config Example**:
+
 ```yaml
+# Select modules to use
+selected_module:
+  ASR: DoubaoASR      # Speech recognition
+  TTS: DoubaoTTS      # Text-to-speech
+  LLM: QwenLLM        # Large language model
+
+# Transport layer
 transport:
-  default: websocket
+  default: "websocket"
+  websocket:
+    port: 8000
+
+# Web service
+web:
+  port: 8080
 ```
 
-To use gRPC transport, set `default` to `grpcgateway` and start the IM service:
+### 3. Windows Setup (Opus Compilation)
+
+Windows users need CGO and Opus library for audio codec support.
+
+#### Install MSYS2
+
+1. Download and install [MSYS2](https://www.msys2.org/)
+2. Open **MSYS2 MINGW64** console
+3. Run the following commands:
+
+```bash
+# Update system
+pacman -Syu
+
+# Install toolchain and Opus library
+pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-go mingw-w64-x86_64-opus
+pacman -S mingw-w64-x86_64-pkg-config
+```
+
+#### Set Environment Variables
+
+In PowerShell or system environment variables:
+
+```bash
+set PKG_CONFIG_PATH=C:\msys64\mingw64\lib\pkgconfig
+set CGO_ENABLED=1
+```
+
+#### Verify Installation
+
+Run once in MINGW64 environment to ensure compilation succeeds:
+
+```bash
+go run ./src/main.go
+```
+
+**Tip**: If `go mod` downloads slowly, set a domestic mirror:
+
+```bash
+go env -w GOPROXY=https://goproxy.cn,direct
+```
+
+### 4. Run the Service
+
+```bash
+# Install dependencies
+go mod tidy
+
+# Start main service
+go run ./src/main.go
+```
+
+After service starts:
+- **HTTP API**: `http://localhost:8080`
+- **WebSocket**: `ws://localhost:8000`
+- **Swagger Docs**: `http://localhost:8080/swagger/index.html`
+
+### 5. Start gRPC IM Service (Optional)
+
+If using gRPC Gateway transport:
+
 ```bash
 cd im-server
 go run main.go
 ```
 
-ASR/LLM/TTS:
-- Configure providers following the existing schema in the config file.
-- Avoid adding/removing fields to maintain compatibility.
+### 6. Start MQTT Server (Optional)
 
----
+If using MQTT transport:
 
-### MCP Configuration
-See: `src/core/mcp/README.md`
-
----
-
-## Build from Source
-
-### Prerequisites
-- Go 1.24.2+
-- On Windows, install CGO and Opus (see below)
-
-Initialize:
 ```bash
-cd angrymiao-ai-server
-cp config.yaml .config.yaml
+cd mqtt-server
+docker-compose up -d
 ```
 
 ---
 
-### Windows Opus Toolchain
-1) Install MSYS2: https://www.msys2.org/  
-2) In MSYS2 MINGW64:
-```bash
-pacman -Syu
-pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-go mingw-w64-x86_64-opus
-pacman -S mingw-w64-x86_64-pkg-config
-```
-3) Environment variables (PowerShell or System):
-```bash
-set PKG_CONFIG_PATH=C:\msys64\mingw64\lib\pkgconfig
-set CGO_ENABLED=1
-```
-4) Sanity check (MINGW64):
-```bash
-go run ./src/main.go
+## MCP Configuration
+
+MCP (Model Context Protocol) allows the server to call external tools and services.
+
+### Configure Local MCP Functions
+
+```yaml
+local_mcp_fun:
+  - time           # Get system time
+  - exit           # Recognize exit intent
+  - change_role    # Switch roles
+  - play_music     # Play local music
+  - change_voice   # Change voice
 ```
 
-If Go module downloads are slow, switch to a domestic mirror/accelerator.
+### Configure External MCP Servers
+
+See detailed configuration: `src/core/mcp/README.md`
+
+Example configuration (in `.mcp_server_settings.json`):
+
+```json
+{
+  "mcpServers": {
+    "weather": {
+      "command": "uvx",
+      "args": ["mcp-server-weather"],
+      "env": {}
+    }
+  }
+}
+```
 
 ---
 
-## Run
+## Authentication & Device Binding
+
+### Authentication Flow
+
+1. **External auth system issues User JWT**
+2. **Call device binding API**
+3. **Get Device Token**
+4. **Use Device Token to connect WebSocket/MQTT**
+
+### Device Binding API
+
 ```bash
-go mod tidy
-go run ./src/main.go
-```
-
----
-
-## External Auth & Device Binding
-
-Flow:
-1) External auth issues a User JWT  
-2) Client calls POST `/api/device/bind` (Header: `Authorization: Bearer <UserJWT>`, Body: `{"device_id":"..."}`)  
-3) Server returns `{device_key, token}`  
-4) Use the device token to connect via WebSocket or im-server
-
-Example (curl):
-```bash
-curl -X POST "http://your-server:8080/api/device/bind" \
+curl -X POST "http://localhost:8080/api/device/bind" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <UserJWT>" \
   -d '{"device_id":"device-001"}'
 ```
 
-Success response:
+**Response Example**:
+
 ```json
-{"success":true,"device_key":"<bind_key>","token":"<device_token>"}
+{
+  "success": true,
+  "device_key": "<bind_key>",
+  "token": "<device_token>"
+}
 ```
 
-WebSocket connection:
-- Prefer headers during handshake:
-  - `Authorization: Bearer <device_token>`
-  - `Device-Id: device-001`
-- Browser query alternative:
-  - `ws://your-server:8000/?device-id=device-001&token=<device_token>`  
-  The server converts the token into an Authorization header.
+### WebSocket Connection
 
-Reference files:
-- `src/device/server.go`
-- `src/device/types.go`
-- `src/core/transport/websocket/transport.go`  
-(Token validity checks, binding logic, and verification points)
+**Recommended (Header)**:
 
-Note: Place the external auth system’s JWT public key at `src/configs/casbin/jwt/public.pem` (replace with your own key; none is included).
+```javascript
+const ws = new WebSocket('ws://localhost:8000', {
+  headers: {
+    'Authorization': 'Bearer <device_token>',
+    'Device-Id': 'device-001'
+  }
+});
+```
+
+**Browser Mode (Query)**:
+
+```javascript
+const ws = new WebSocket('ws://localhost:8000/?device-id=device-001&token=<device_token>');
+```
+
+### JWT Public Key Configuration
+
+Place the external auth system's JWT public key at:
+
+```
+src/configs/casbin/jwt/public.pem
+```
+
+**Reference Implementation**:
+- `src/httpsvr/device/server.go` - Device binding logic
+- `src/core/transport/websocket/transport.go` - WebSocket authentication
 
 ---
 
-## Swagger
-Open:
+## API Documentation
+
+### Swagger Documentation
+
+After starting the service, visit:
+
 ```
 http://localhost:8080/swagger/index.html
 ```
 
-Refresh API docs:
+### Update Swagger Docs
+
+Regenerate docs after code changes:
+
 ```bash
 cd src
 swag init -g main.go
 ```
 
----
+### Main API Endpoints
 
-# 中文
+#### User Friend Management
+- `POST /api/friends` - Add friend/bot
+- `GET /api/friends` - Get friend list
+- `DELETE /api/friends/:id` - Delete friend
 
-> 一个以对话为核心的多模态后端，让大多数任务无需传统 GUI 或 App，也能高效完成。
+#### Bot Configuration Management
+- `POST /api/bots` - Create bot config
+- `GET /api/bots/:id` - Get bot details
+- `PUT /api/bots/:id` - Update bot config
+- `DELETE /api/bots/:id` - Delete bot config
+- `GET /api/bots/search` - Search bots
+- `GET /api/bots/my` - Get my created bots
 
-## 概览
-Dialogue is All You Need（AM glass 后端服务）是面向语音与多模态交互的端到端、跨平台服务。支持灵活的传输层、可插拔的 ASR/TTS/LLM 模型，以及基于 MCP 的工具接入（如地图、天气）。系统设计目标是让大部分工作通过自然对话完成，必要时再用轻量的可视化补充。
+#### Model Configuration Management
+- `POST /api/models` - Create model config
+- `GET /api/models` - Get model list
+- `PUT /api/models/:id` - Update model config
+- `DELETE /api/models/:id` - Delete model config
 
-## “Dialogue is All You Need”的含义
-- 通过对话可解决 80% 甚至更多过去依赖 GUI 和 App 的需求。无需页面跳转与交互分散，只需直接表达意图。
-- 和 AI 的交流、推进任务本就应当像与团队协作：陈述目标、补充上下文、明确步骤、快速迭代，全部在对话中完成。
-- 少数确需 GUI 的场景（如富数据展示、结构化输入），在对话中插入 H5 卡片即可：  
-  - 更高效率（免切换应用、减少上下文丢失）  
-  - 更佳跨平台（HTML5 卡片具备一致渲染）
-- 这是一个端到端的跨平台方案；发起端可以非常轻量：不仅限于 PC/手机浏览器，任何运行 Linux 或 RTOS 的嵌入式随身设备也可以接入服务。
+#### Device Management
+- `POST /api/device/bind` - Device binding
+- `GET /api/device/info` - Get device info
 
-## 功能清单
-- [x] 传输层：WebSocket、gRPC
-- [x] 语音对话：PCM / Opus
-- [x] 模型能力：
-  - ASR：豆包流式
-  - TTS：EdgeTTS / 豆包
-  - LLM：OpenAI API、Ollama
-- [x] 语音控制调用摄像头进行图像识别
-- [x] MCP 协议（客户端 / 本地 / 服务器），可接入高德地图、天气查询等
-- [x] 语音控制切换角色声音
-- [x] 语音控制切换预设角色
-- [x] 支持单机部署
-- [x] 本地数据库：sqlite、postgre
+#### OTA Updates
+- `GET /api/ota/check` - Check for updates
+- `POST /api/ota/upload` - Upload firmware
 
-## 快速开始
-
-### 配置 `.config.yaml`
-- 根目录有模板：`config.yaml`
-- 复制为本地配置：`cp config.yaml .config.yaml`
-- 按需配置模型、WebSocket、Server 地址等字段
-
-WebSocket 地址：
-```yaml
-web:
-  websocket: ws://your-server-ip:8000
-```
-
-传输层：
-```yaml
-transport:
-  default: websocket
-```
-
-如需使用 gRPC，将 `default` 改为 `grpcgateway`，并在 `im-server` 目录启动 IM 服务：
-```bash
-cd im-server
-go run main.go
-```
-
-ASR/LLM/TTS：
-- 按配置文件既有结构填写对应服务。
-- 尽量不要增减字段以保证兼容性。
+#### Vision Services
+- `POST /api/vision/analyze` - Image analysis
 
 ---
 
-### MCP 协议配置
-参考：`src/core/mcp/README.md`
+## Use Cases
+
+### Smart Hardware Devices
+- Smart speakers, smart glasses, and other voice interaction devices
+- Support for WebSocket, MQTT, gRPC connection methods
+- Low-latency real-time voice dialogue
+
+### AI Application Development
+- Voice assistant applications
+- Multimodal AI applications (voice + vision)
+- Custom bot platforms
+
+### IoT Scenarios
+- MQTT device access
+- UDP audio transmission optimization
+- Device authentication and management
 
 ---
 
-## 源码安装与运行
+## Tech Stack
 
-### 前置条件
-- Go 1.24.2+
-- Windows 需安装 CGO 与 Opus（见下节）
-
-初始化：
-```bash
-cd angrymiao-ai-server
-cp config.yaml .config.yaml
-```
-
----
-
-### Windows 安装 Opus 编译环境
-1) 安装 MSYS2：https://www.msys2.org/  
-2) 打开 MSYS2 MINGW64，执行：
-```bash
-pacman -Syu
-pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-go mingw-w64-x86_64-opus
-pacman -S mingw-w64-x86_64-pkg-config
-```
-3) 设置环境变量（PowerShell 或系统变量）：
-```bash
-set PKG_CONFIG_PATH=C:\msys64\mingw64\lib\pkgconfig
-set CGO_ENABLED=1
-```
-4) 建议先在 MINGW64 环境下运行一次：
-```bash
-go run ./src/main.go
-```
-
-如 Go 模块更新较慢，可配置国内代理镜像源以加速依赖下载。
+- **Language**: Go 1.24+
+- **Web Framework**: Gin
+- **Database**: SQLite / PostgreSQL
+- **Cache**: Redis
+- **Message Queue**: MQTT
+- **Audio Codec**: Opus
+- **AI Models**: OpenAI API / Ollama / Coze
+- **Protocols**: WebSocket / gRPC / MQTT / MCP
 
 ---
 
-## 运行项目
-```bash
-go mod tidy
-go run ./src/main.go
+## Development Guide
+
+### Adding New AI Providers
+
+1. Create new provider in `src/core/providers/` directory
+2. Implement corresponding interface (ASR/TTS/LLM/VLLLM)
+3. Register provider in `init()` function
+4. Add configuration in config file
+
+Example:
+
+```go
+package myprovider
+
+import "angrymiao-ai-server/src/core/providers/llm"
+
+func init() {
+    llm.Register("myprovider", NewProvider)
+}
+
+func NewProvider(config *llm.Config) (llm.Provider, error) {
+    // Implement provider logic
+}
 ```
+
+### Adding New MCP Tools
+
+1. Implement tool logic in `src/core/mcp/`
+2. Add tool name to `local_mcp_fun` config
+3. Register tool to Function Registry
 
 ---
 
-## 外部授权与设备绑定说明
+## FAQ
 
-流程：
-1) 外部授权系统签发 User JWT  
-2) 调用 POST `/api/device/bind`（Header: `Authorization: Bearer <UserJWT>`，Body: `{"device_id":"..."}`）  
-3) 服务返回 `{device_key, token}`  
-4) 使用 device token 连接 WebSocket 或 im-server
+### Q: How to switch between different AI models?
 
-示例（curl）：
-```bash
-curl -X POST "http://your-server:8080/api/device/bind" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <UserJWT>" \
-  -d '{"device_id":"device-001"}'
-```
+A: Modify the `selected_module` config in `.config.yaml`, then restart the service.
 
-返回（成功）：
-```json
-{"success":true,"device_key":"<bind_key>","token":"<device_token>"}
-```
+### Q: Which speech recognition services are supported?
 
-WebSocket 连接：
-- 推荐握手时用 Header 传递：
-  - `Authorization: Bearer <device_token>`
-  - `Device-Id: device-001`
-- 浏览器可使用 query：
-  - `ws://your-server:8000/?device-id=device-001&token=<device_token>`  
-  服务会将 token 转为 Authorization header。
+A: Supports Doubao, Deepgram, GoSherpa, and other ASR services.
 
-参考实现：
-- `src/device/server.go`
-- `src/device/types.go`
-- `src/core/transport/websocket/transport.go`  
-（包含 token 有效期检查、绑定逻辑与关键校验点）
+### Q: How to enable VAD (Voice Activity Detection)?
 
-注意：请将外部授权系统的 JWT 公钥文件放到 `src/configs/casbin/jwt/public.pem`（仓库未包含真实密钥，请替换为你的 `public.pem`）。
+A: Set HTTP Header `Enable-VAD: true` when client connects.
+
+### Q: What to do if MQTT connection fails?
+
+A: Check if MQTT server is running, verify username/password, and ensure firewall ports are open.
+
+### Q: How to configure multiple LLM models?
+
+A: Add multiple model configs in the `LLM` section, select which to use via `selected_module.LLM`.
 
 ---
 
-## Swagger 文档
-打开：
-```
-http://localhost:8080/swagger/index.html
-```
+## License
 
-更新 API 文档：
-```bash
-cd src
-swag init -g main.go
-```
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
